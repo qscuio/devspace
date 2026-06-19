@@ -1,8 +1,8 @@
 import { randomUUID } from "node:crypto";
 import type { WorkspaceMode, WorkspaceStore } from "./workspace-store.js";
 import { mkdir, opendir, stat } from "node:fs/promises";
+import { existsSync, readFileSync } from "node:fs";
 import { dirname, join, relative, resolve, sep } from "node:path";
-import { loadProjectContextFiles } from "@earendil-works/pi-coding-agent";
 import type { ServerConfig } from "./config.js";
 import { createManagedWorktree } from "./git-worktrees.js";
 import { assertAllowedPath, isPathInsideRoot, resolveAllowedPath } from "./roots.js";
@@ -241,17 +241,30 @@ export class WorkspaceRegistry {
 
   private loadInitialAgentsFiles(root: string): LoadedAgentsFile[] {
     const agentDir = resolve(this.config.agentDir);
+    const candidates = [
+      join(agentDir, "AGENTS.md"),
+      join(agentDir, "CLAUDE.md"),
+      join(root, "AGENTS.md"),
+      join(root, "CLAUDE.md"),
+    ];
+    const loaded: LoadedAgentsFile[] = [];
 
-    return loadProjectContextFiles({ cwd: root, agentDir })
-      .filter((file) => {
-        const path = resolve(file.path);
-        if (isPathInsideRoot(path, agentDir)) return true;
-        return isPathInsideRoot(path, root) && dirname(path) === root;
-      })
-      .map((file) => ({
-        path: resolve(file.path),
-        content: file.content,
-      }));
+    for (const candidate of candidates) {
+      const path = resolve(candidate);
+      if (!existsSync(path)) continue;
+      if (!isPathInsideRoot(path, agentDir) && !(isPathInsideRoot(path, root) && dirname(path) === root)) continue;
+
+      try {
+        loaded.push({
+          path,
+          content: readFileSync(path, "utf8"),
+        });
+      } catch {
+        // Ignore unreadable instruction files; direct reads will report errors.
+      }
+    }
+
+    return loaded;
   }
 
   private async findAvailableAgentsFiles(

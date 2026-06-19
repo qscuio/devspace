@@ -149,6 +149,11 @@ writeFileSync(
     port: 8787,
     allowedRoots: [process.cwd()],
     publicBaseUrl: "https://devspace.example.com",
+    shellEnabled: false,
+    skillsEnabled: false,
+    toolMode: "full",
+    toolNaming: "legacy",
+    widgets: "off",
   }),
 );
 writeFileSync(
@@ -162,9 +167,15 @@ const fileConfig = loadConfig({ DEVSPACE_CONFIG_DIR: configDir });
 assert.equal(fileConfig.port, 8787);
 assert.equal(fileConfig.oauth.ownerToken, "persisted-owner-token-long-enough");
 assert.equal(fileConfig.publicBaseUrl, "https://devspace.example.com");
+assert.equal(fileConfig.shellEnabled, false);
+assert.equal(fileConfig.skillsEnabled, false);
+assert.equal(fileConfig.minimalTools, false);
+assert.equal(fileConfig.toolNaming, "legacy");
+assert.equal(fileConfig.widgets, "off");
 assert.deepEqual(fileConfig.allowedHosts, [
   "localhost",
   "127.0.0.1",
   "::1",
   "devspace.example.com",
 ]);
+assert.equal(loadConfig({ DEVSPACE_CONFIG_DIR: configDir, DEVSPACE_SHELL: "1" }).shellEnabled, true);

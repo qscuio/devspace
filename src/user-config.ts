@@ -15,6 +15,11 @@ export interface DevspaceUserConfig {
   allowedRoots?: string[];
   publicBaseUrl?: string | null;
   allowedHosts?: string[];
+  shellEnabled?: boolean;
+  skillsEnabled?: boolean;
+  toolMode?: "minimal" | "full";
+  toolNaming?: "legacy" | "short";
+  widgets?: "off" | "changes" | "full";
   stateDir?: string;
   worktreeRoot?: string;
   agentDir?: string;

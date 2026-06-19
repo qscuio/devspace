@@ -185,7 +185,9 @@ function toolNamesFor(config: ServerConfig): ToolNames {
 
 function serverInstructions(config: ServerConfig, toolNames: ToolNames): string {
   const inspection = config.minimalTools
-    ? `In minimal tool mode, ${toolNames.grep}, ${toolNames.glob}, and ${toolNames.ls} are disabled; use ${toolNames.shell} with command-line tools such as grep, rg, find, ls, and tree for search and directory inspection. `
+    ? config.shellEnabled
+      ? `In minimal tool mode, ${toolNames.grep}, ${toolNames.glob}, and ${toolNames.ls} are disabled; use ${toolNames.shell} with command-line tools such as grep, rg, find, ls, and tree for search and directory inspection. `
+      : `In minimal tool mode, ${toolNames.grep}, ${toolNames.glob}, ${toolNames.ls}, and ${toolNames.shell} are disabled. Use ${toolNames.read} for direct file reads. `
     : `Prefer ${toolNames.read}, ${toolNames.grep}, ${toolNames.glob}, and ${toolNames.ls} for file inspection. `;
 
   const skills = config.skillsEnabled
@@ -199,7 +201,11 @@ function serverInstructions(config: ServerConfig, toolNames: ToolNames): string 
       ? " After creating, editing, or overwriting files, call show_changes once after the related file changes are complete so the user can see the aggregate diff."
       : "";
 
-  return `Use DevSpace as a local coding workspace. Call ${toolNames.openWorkspace} once per project folder or worktree to obtain a workspaceId. Reuse that same workspaceId for all later file, search, edit, write, show-changes, and shell tools in that folder; do not call ${toolNames.openWorkspace} again unless switching folders/worktrees, changing checkout/worktree mode, the workspaceId is rejected as unknown, or the user explicitly asks to reopen. ${agentsMd}${skills}${inspection}Prefer ${toolNames.edit} for targeted modifications, ${toolNames.write} only for new files or complete rewrites, and ${toolNames.shell} for tests, builds, git inspection, package scripts, and commands that are better executed by the shell. Do not create or modify files with ${toolNames.shell}; avoid shell redirection, heredocs, tee, sed -i, perl -i, node/python/ruby scripts, or any command whose purpose is to write project files.${showChanges}`;
+  const shellGuidance = config.shellEnabled
+    ? `, and ${toolNames.shell} for tests, builds, git inspection, package scripts, and commands that are better executed by the shell. Do not create or modify files with ${toolNames.shell}; avoid shell redirection, heredocs, tee, sed -i, perl -i, node/python/ruby scripts, or any command whose purpose is to write project files`
+    : ". Shell execution is disabled for this server";
+
+  return `Use DevSpace as a local coding workspace. Call ${toolNames.openWorkspace} once per project folder or worktree to obtain a workspaceId. Reuse that same workspaceId for all later file, search, edit, write, show-changes, and enabled shell tools in that folder; do not call ${toolNames.openWorkspace} again unless switching folders/worktrees, changing checkout/worktree mode, the workspaceId is rejected as unknown, or the user explicitly asks to reopen. ${agentsMd}${skills}${inspection}Prefer ${toolNames.edit} for targeted modifications, ${toolNames.write} only for new files or complete rewrites${shellGuidance}.${showChanges}`;
 }
 function resultOutputSchema(extra: z.ZodRawShape = {}): z.ZodRawShape {
   return {
@@ -1171,10 +1177,11 @@ function createMcpServer(
     );
   }
 
-  registerAppTool(
-    server,
-    toolNames.shell,
-    {
+  if (config.shellEnabled) {
+    registerAppTool(
+      server,
+      toolNames.shell,
+      {
       title: config.toolNaming === "short" ? "Bash" : "Run shell",
       description: config.minimalTools
         ? `Run a shell command inside an open workspace. Use only for tests, builds, git inspection, package scripts, search, file discovery, and directory inspection. In minimal tool mode, ${toolNames.grep}, ${toolNames.glob}, and ${toolNames.ls} are disabled; use command-line tools such as grep, rg, find, ls, and tree for those read-only inspection actions. Do not use ${toolNames.shell} to create or modify files. Do not use shell redirection, heredocs, tee, sed -i, perl -i, node/python/ruby scripts, or generated scripts to write project files; use ${toolNames.edit} for targeted changes and ${toolNames.write} for new files or full rewrites. Prefer ${toolNames.read} for direct file reads. Call open_workspace first and pass workspaceId. This is powerful local execution and should only be exposed behind strong authentication.`
@@ -1205,7 +1212,7 @@ function createMcpServer(
       ...toolWidgetDescriptorMeta(config, "shell"),
       annotations: SHELL_TOOL_ANNOTATIONS,
     },
-    async ({ workspaceId, workingDirectory, ...input }) => {
+      async ({ workspaceId, workingDirectory, ...input }) => {
       const startedAt = performance.now();
       const workspace = workspaces.getWorkspace(workspaceId);
       const cwd = workspaces.resolveWorkingDirectory(
@@ -1258,8 +1265,9 @@ function createMcpServer(
           result: contentText(response.content),
         },
       };
-    },
-  );
+      },
+    );
+  }
 
   return server;
 }
@@ -1445,6 +1453,7 @@ if (await isMainModule()) {
     );
     console.log(`allowed roots: ${config.allowedRoots.join(", ")}`);
     console.log("auth: oauth owner-token flow required");
+    console.log(`shell tool: ${config.shellEnabled ? "enabled" : "disabled"}`);
     console.log(`logging: ${config.logging.level} ${config.logging.format}`);
     console.log(`request logging: ${config.logging.requests ? "enabled" : "disabled"}`);
     console.log(`asset logging: ${config.logging.assets ? "enabled" : "disabled"}`);

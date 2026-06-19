@@ -33,7 +33,6 @@
   "license": "MIT",
   "dependencies": {
     "@clack/prompts": "^1.5.1",
-    "@earendil-works/pi-coding-agent": "^0.79.4",
     "@modelcontextprotocol/ext-apps": "^1.7.2",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "@pierre/diffs": "^1.2.5",
@@ -59,6 +58,7 @@
   },
   "overrides": {
     "protobufjs": "7.6.4",
+    "undici": "8.5.0",
     "ws": "8.21.0"
   }
 }
