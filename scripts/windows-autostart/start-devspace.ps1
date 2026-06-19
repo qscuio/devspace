@@ -29,6 +29,7 @@ $configDir = $env:DEVSPACE_CONFIG_DIR
 if (-not $configDir) {
   $env:DEVSPACE_CONFIG_DIR = "C:\Users\86182\.devspace"
 }
+$env:DEVSPACE_TRUST_PROXY = "1"
 
 $tunnelName = $env:DEVSPACE_AUTOSTART_TUNNEL
 if (-not $tunnelName) {
