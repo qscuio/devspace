@@ -130,10 +130,10 @@ npx @waishnav/devspace serve
 
 ## NotebookLM
 
-DevSpace exposes NotebookLM tools by default with a `notebooklm_` prefix. The
-bridge starts the upstream `notebooklm-mcp` stdio server lazily, only when a
-NotebookLM tool is called. If that upstream browser automation is unstable in
-your environment, disable only the NotebookLM bridge:
+DevSpace exposes high-level NotebookLM tools by default with a `notebooklm_`
+prefix. The bridge starts the upstream `notebooklm-mcp` stdio server lazily,
+only when a NotebookLM tool is called. If that upstream browser automation is
+unstable in your environment, disable only the NotebookLM bridge:
 
 ```bash
 DEVSPACE_NOTEBOOKLM=0 npx @waishnav/devspace serve
@@ -144,10 +144,34 @@ DEVSPACE_NOTEBOOKLM=0 npx @waishnav/devspace serve
 | `DEVSPACE_NOTEBOOKLM` | `1` |
 | `DEVSPACE_NOTEBOOKLM_COMMAND` | `npx` |
 | `DEVSPACE_NOTEBOOKLM_ARGS` | `-y,-p,notebooklm-mcp@1.2.1,-p,@modelcontextprotocol/sdk@1.28.0,notebooklm-mcp` |
+| `DEVSPACE_NOTEBOOKLM_RAW_TOOLS` | `0` |
+| `DEVSPACE_NOTEBOOKLM_DATA_DIR` | `<DEVSPACE_STATE_DIR>/notebooklm` |
+| `DEVSPACE_NOTEBOOKLM_SESSION_TTL_SECONDS` | `900` |
 
-The default tools are `notebooklm_get_health`, `notebooklm_setup_auth`,
-`notebooklm_list_notebooks`, `notebooklm_add_notebook`, and
-`notebooklm_ask_question`.
+The default tools are:
+
+- `notebooklm_status` for auth, profile, library, session, and repair status.
+- `notebooklm_discover` for best-effort discovery of notebooks visible to the
+  signed-in NotebookLM browser profile.
+- `notebooklm_library` for listing/searching local NotebookLM metadata and
+  clearing stored sessions.
+- `notebooklm_research` for asking a selected notebook by URL, ID, alias, or
+  search term.
+
+Set `DEVSPACE_NOTEBOOKLM_RAW_TOOLS=1` only when you need the upstream
+`notebooklm-mcp` tools directly for debugging. Raw tools include
+`notebooklm_get_health`, `notebooklm_setup_auth`, `notebooklm_list_notebooks`,
+`notebooklm_add_notebook`, and `notebooklm_ask_question`.
+
+`DEVSPACE_NOTEBOOKLM_DATA_DIR` stores the local library, session registry, and
+upstream browser/profile state. Keep it stable across restarts to avoid repeated
+Google authentication. `DEVSPACE_NOTEBOOKLM_SESSION_TTL_SECONDS` controls how
+long a NotebookLM session can be reused; active successful follow-ups refresh
+the session record.
+
+Discovery is best-effort because NotebookLM does not provide a stable public
+notebook-list API. If discovery misses a notebook, pass its NotebookLM URL
+directly to `notebooklm_research`.
 
 ## Logging
 

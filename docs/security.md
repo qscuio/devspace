@@ -109,6 +109,21 @@ logged-in browser profile. Use a dedicated Google account when possible, protect
 the public hostname with Cloudflare Access plus DevSpace OAuth, and set
 `DEVSPACE_NOTEBOOKLM=0` if you do not want NotebookLM exposed from a deployment.
 
+By default, DevSpace keeps NotebookLM library metadata, reusable session
+references, and upstream profile data under `<DEVSPACE_STATE_DIR>/notebooklm`.
+You can move that state with `DEVSPACE_NOTEBOOKLM_DATA_DIR`. Keep the directory
+private to the server user and do not place it in a shared project checkout.
+
+The default NotebookLM tools are the high-level `notebooklm_status`,
+`notebooklm_discover`, `notebooklm_library`, and `notebooklm_research` tools.
+They can write local metadata and session state even when the underlying
+NotebookLM notebook is only being read. Raw upstream tools are hidden unless
+`DEVSPACE_NOTEBOOKLM_RAW_TOOLS=1` is set for debugging.
+
+If Google authentication becomes stale, use `notebooklm_status` to get the
+repair hint. Session reuse is automatic, but stale browser profiles may still
+need a visible browser login on the host running DevSpace.
+
 ## Shell Access
 
 The shell tool is powerful by design. It is meant for tests, builds, git, and

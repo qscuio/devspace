@@ -202,6 +202,44 @@ DevSpace looks in:
 If a skill appears in `open_workspace`, the model must read that skill's
 `SKILL.md` before reading other files inside the skill directory.
 
+## NotebookLM Keeps Asking For Google Login
+
+NotebookLM uses upstream browser automation. Keep the NotebookLM data directory
+stable so the browser profile can be reused:
+
+```bash
+DEVSPACE_NOTEBOOKLM_DATA_DIR="$HOME/.local/share/devspace/notebooklm" \
+npx @waishnav/devspace serve
+```
+
+Run `notebooklm_status` and follow its repair hint. If the profile is stale,
+rerun auth with a visible browser on the host running DevSpace. If another
+Chrome or Chromium process is using the same profile, close it before retrying.
+
+## NotebookLM Sessions Expire
+
+DevSpace stores reusable NotebookLM session references and refreshes them after
+successful follow-up questions. The default reuse window is 900 seconds:
+
+```bash
+DEVSPACE_NOTEBOOKLM_SESSION_TTL_SECONDS=900 npx @waishnav/devspace serve
+```
+
+Use `fresh_session: true` with `notebooklm_research` when you intentionally want
+to start over. Use `notebooklm_library` with `action: "clear_sessions"` to clear
+stored sessions for a notebook.
+
+## NotebookLM Discovery Misses Notebooks
+
+`notebooklm_discover` is best-effort because NotebookLM does not expose a stable
+public notebook-list API. Discovery imports visible notebook cards when the
+signed-in browser profile can see them, but it may miss notebooks after UI
+changes, account switches, or browser failures.
+
+Use the exact NotebookLM URL with `notebooklm_research` when discovery misses a
+notebook. DevSpace will add minimal local metadata for that URL so future
+queries can resolve it.
+
 ## Review Card Does Not Appear
 
 Per-tool widget cards are enabled by default with:
