@@ -39,6 +39,7 @@ function createTestClient(
 }
 
 const calls: Array<{ name: string; arguments?: Record<string, unknown> }> = [];
+let closeCalls = 0;
 const fakeNotebooklm: NotebookLmClient = {
   async callTool(name, args) {
     calls.push({ name, arguments: args });
@@ -62,7 +63,9 @@ const fakeNotebooklm: NotebookLmClient = {
       structuredContent: { ok: true, name },
     };
   },
-  async close() {},
+  async close() {
+    closeCalls += 1;
+  },
 };
 
 {
@@ -78,6 +81,10 @@ const fakeNotebooklm: NotebookLmClient = {
     assert.ok(toolNames.includes("notebooklm_research"));
     assert.ok(!toolNames.includes("notebooklm_get_health"));
     assert.ok(!toolNames.includes("notebooklm_ask_question"));
+    const researchTool = tools.tools.find((tool) => tool.name === "notebooklm_research");
+    assert.equal(researchTool?.annotations?.readOnlyHint, false);
+    assert.equal(researchTool?.annotations?.destructiveHint, false);
+    assert.equal(researchTool?.annotations?.openWorldHint, true);
 
     const result = await client.callTool({
       name: "notebooklm_research",
@@ -111,6 +118,7 @@ const fakeNotebooklm: NotebookLmClient = {
     await client.close();
     await server.close();
   }
+  assert.equal(closeCalls, 1);
 }
 
 {

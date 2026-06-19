@@ -29,8 +29,14 @@ export function registerNotebookLmTools(
   const dataDir = config.notebooklm.dataDir;
   const library = new NotebookLmLibraryStore(dataDir);
   const sessions = new NotebookLmSessionStore(dataDir, config.notebooklm.sessionTtlSeconds);
-  const client = factory();
-  const workflows = new NotebookLmWorkflows({ library, sessions, client, dataDir });
+  const managedClient = createManagedNotebookLmClient(factory);
+  registerNotebookLmCleanup(server, managedClient.close);
+  const workflows = new NotebookLmWorkflows({
+    library,
+    sessions,
+    client: managedClient.client,
+    dataDir,
+  });
 
   server.registerTool(
     "notebooklm_status",
@@ -95,12 +101,72 @@ export function registerNotebookLmTools(
         fresh_session: z.boolean().optional(),
         show_browser: z.boolean().optional(),
       },
-      annotations: { readOnlyHint: true, openWorldHint: true },
+      annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
     },
     async (args) => formatToolResult(await workflows.research(args as NotebookLmResearchInput)),
   );
 
-  if (config.notebooklm.rawTools) registerRawNotebookLmTools(server, client);
+  if (config.notebooklm.rawTools) registerRawNotebookLmTools(server, managedClient.client);
+}
+
+function createManagedNotebookLmClient(factory: NotebookLmClientFactory): {
+  client: NotebookLmClient;
+  close: () => Promise<void>;
+} {
+  let client: NotebookLmClient | undefined;
+  let closePromise: Promise<void> | undefined;
+  const getClient = () => {
+    client ??= factory();
+    return client;
+  };
+  const close = async () => {
+    if (closePromise) {
+      await closePromise;
+      return;
+    }
+    if (!client) return;
+
+    const closingClient = client;
+    client = undefined;
+    closePromise = closingClient.close().finally(() => {
+      closePromise = undefined;
+    });
+    await closePromise;
+  };
+
+  return {
+    client: {
+      callTool(name, args) {
+        return getClient().callTool(name, args);
+      },
+      close,
+    },
+    close,
+  };
+}
+
+function registerNotebookLmCleanup(
+  server: McpServer,
+  cleanup: () => Promise<void>,
+): void {
+  const originalClose = server.close.bind(server);
+  let closePromise: Promise<void> | undefined;
+  server.close = async () => {
+    closePromise ??= (async () => {
+      try {
+        await originalClose();
+      } finally {
+        await cleanup();
+      }
+    })();
+    await closePromise;
+  };
+
+  const previousOnClose = server.server.onclose;
+  server.server.onclose = () => {
+    previousOnClose?.();
+    void cleanup();
+  };
 }
 
 async function runLibraryWorkflow(
