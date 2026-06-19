@@ -21,6 +21,24 @@ const DEFAULT_NOTEBOOKLM_ARGS = [
 const DEFAULT_NOTEBOOKLM_SESSION_TTL_SECONDS = 900;
 const DEFAULT_OAUTH_ACCESS_TOKEN_TTL_SECONDS = 60 * 60;
 const DEFAULT_OAUTH_REFRESH_TOKEN_TTL_SECONDS = 30 * 24 * 60 * 60;
+const DEFAULT_QNOTE_REPO_URL = "git@github.com:qscuio/qnote.git";
+const DEFAULT_QNOTE_ALLOWED_DIRS = [
+  "knowledge",
+  "lessons",
+  "skills",
+  "misc",
+  "chatgpt",
+  "claude",
+  "codex",
+  "cursor",
+  "browser",
+  "notebooklm",
+  "dsrt",
+  "simulation",
+  "tools",
+  "broadcom",
+  "linux",
+];
 
 export interface NotebookLmConfig {
   enabled: boolean;
@@ -29,6 +47,15 @@ export interface NotebookLmConfig {
   rawTools: boolean;
   dataDir: string;
   sessionTtlSeconds: number;
+}
+
+export interface QnoteConfig {
+  enabled: boolean;
+  dir: string;
+  repoUrl: string;
+  branch: string;
+  autoPush: boolean;
+  allowedDirs: string[];
 }
 
 export interface ServerConfig {
@@ -48,6 +75,7 @@ export interface ServerConfig {
   skillPaths: string[];
   agentDir: string;
   notebooklm: NotebookLmConfig;
+  qnote: QnoteConfig;
   logging: LoggingConfig;
   cloudflareAccess: CloudflareAccessConfig;
 }
@@ -179,6 +207,35 @@ function parseNotebookLmConfig(
       env.DEVSPACE_NOTEBOOKLM_SESSION_TTL_SECONDS ?? fileValue?.sessionTtlSeconds?.toString(),
       DEFAULT_NOTEBOOKLM_SESSION_TTL_SECONDS,
       "DEVSPACE_NOTEBOOKLM_SESSION_TTL_SECONDS",
+    ),
+  };
+}
+
+function parseQnoteConfig(
+  env: NodeJS.ProcessEnv,
+  fileValue: {
+    enabled?: boolean;
+    dir?: string;
+    repoUrl?: string;
+    branch?: string;
+    autoPush?: boolean;
+    allowedDirs?: string[];
+  } | undefined,
+  stateDir: string,
+): QnoteConfig {
+  return {
+    enabled: env.DEVSPACE_QNOTE === undefined
+      ? fileValue?.enabled ?? true
+      : parseBoolean(env.DEVSPACE_QNOTE),
+    dir: resolve(expandHomePath(env.DEVSPACE_QNOTE_DIR ?? fileValue?.dir ?? join(stateDir, "qnote"))),
+    repoUrl: env.DEVSPACE_QNOTE_REPO_URL?.trim() || fileValue?.repoUrl || DEFAULT_QNOTE_REPO_URL,
+    branch: env.DEVSPACE_QNOTE_BRANCH?.trim() || fileValue?.branch || "main",
+    autoPush: env.DEVSPACE_QNOTE_AUTO_PUSH === undefined
+      ? fileValue?.autoPush ?? true
+      : parseBoolean(env.DEVSPACE_QNOTE_AUTO_PUSH),
+    allowedDirs: parseStringList(
+      env.DEVSPACE_QNOTE_ALLOWED_DIRS,
+      fileValue?.allowedDirs ?? DEFAULT_QNOTE_ALLOWED_DIRS,
     ),
   };
 }
@@ -339,6 +396,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     skillPaths: parsePathList(env.DEVSPACE_SKILL_PATHS),
     agentDir: resolve(expandHomePath(env.DEVSPACE_AGENT_DIR ?? files.config.agentDir ?? defaultAgentDir())),
     notebooklm: parseNotebookLmConfig(env, files.config.notebooklm, stateDir),
+    qnote: parseQnoteConfig(env, files.config.qnote, stateDir),
     logging: parseLoggingConfig(env),
     cloudflareAccess: parseCloudflareAccessConfig(env, files.config.cloudflareAccess),
   };

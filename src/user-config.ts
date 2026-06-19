@@ -31,6 +31,14 @@ export interface DevspaceUserConfig {
     dataDir?: string;
     sessionTtlSeconds?: number;
   };
+  qnote?: {
+    enabled?: boolean;
+    dir?: string;
+    repoUrl?: string;
+    branch?: string;
+    autoPush?: boolean;
+    allowedDirs?: string[];
+  };
   cloudflareAccess?: {
     enabled?: boolean;
     teamDomain?: string;

@@ -30,6 +30,25 @@ assert.equal(loadConfig(baseEnv).shellEnabled, true);
 assert.equal(loadConfig({ ...baseEnv, DEVSPACE_SHELL: "0" }).shellEnabled, false);
 assert.equal(loadConfig({ ...baseEnv, DEVSPACE_SHELL: "1" }).shellEnabled, true);
 assert.equal(loadConfig(baseEnv).notebooklm.enabled, true);
+assert.equal(loadConfig(baseEnv).qnote.enabled, true);
+assert.match(loadConfig(baseEnv).qnote.dir, /qnote$/);
+assert.equal(loadConfig(baseEnv).qnote.repoUrl, "git@github.com:qscuio/qnote.git");
+assert.equal(loadConfig(baseEnv).qnote.branch, "main");
+assert.equal(loadConfig(baseEnv).qnote.autoPush, true);
+assert.ok(loadConfig(baseEnv).qnote.allowedDirs.includes("knowledge"));
+assert.ok(loadConfig(baseEnv).qnote.allowedDirs.includes("lessons"));
+assert.ok(loadConfig(baseEnv).qnote.allowedDirs.includes("skills"));
+assert.ok(loadConfig(baseEnv).qnote.allowedDirs.includes("chatgpt"));
+assert.equal(loadConfig({ ...baseEnv, DEVSPACE_QNOTE: "0" }).qnote.enabled, false);
+assert.equal(loadConfig({ ...baseEnv, DEVSPACE_QNOTE: "1" }).qnote.enabled, true);
+assert.equal(loadConfig({ ...baseEnv, DEVSPACE_QNOTE_DIR: "C:\\tmp\\qnote" }).qnote.dir, "C:\\tmp\\qnote");
+assert.equal(loadConfig({ ...baseEnv, DEVSPACE_QNOTE_REPO_URL: "git@example.com:me/qnote.git" }).qnote.repoUrl, "git@example.com:me/qnote.git");
+assert.equal(loadConfig({ ...baseEnv, DEVSPACE_QNOTE_BRANCH: "notes" }).qnote.branch, "notes");
+assert.equal(loadConfig({ ...baseEnv, DEVSPACE_QNOTE_AUTO_PUSH: "0" }).qnote.autoPush, false);
+assert.deepEqual(
+  loadConfig({ ...baseEnv, DEVSPACE_QNOTE_ALLOWED_DIRS: "knowledge,skills" }).qnote.allowedDirs,
+  ["knowledge", "skills"],
+);
 assert.equal(loadConfig({ ...baseEnv, DEVSPACE_NOTEBOOKLM: "0" }).notebooklm.enabled, false);
 assert.equal(loadConfig({ ...baseEnv, DEVSPACE_NOTEBOOKLM: "1" }).notebooklm.enabled, true);
 assert.equal(loadConfig(baseEnv).notebooklm.command, "npx");
@@ -201,6 +220,14 @@ writeFileSync(
       dataDir: "C:\\tmp\\persisted-notebooklm",
       sessionTtlSeconds: 120,
     },
+    qnote: {
+      enabled: false,
+      dir: "C:\\tmp\\persisted-qnote",
+      repoUrl: "git@example.com:me/qnote.git",
+      branch: "notes",
+      autoPush: false,
+      allowedDirs: ["knowledge", "skills"],
+    },
   })}`,
 );
 writeFileSync(
@@ -226,6 +253,14 @@ assert.deepEqual(fileConfig.notebooklm, {
   rawTools: true,
   dataDir: "C:\\tmp\\persisted-notebooklm",
   sessionTtlSeconds: 120,
+});
+assert.deepEqual(fileConfig.qnote, {
+  enabled: false,
+  dir: "C:\\tmp\\persisted-qnote",
+  repoUrl: "git@example.com:me/qnote.git",
+  branch: "notes",
+  autoPush: false,
+  allowedDirs: ["knowledge", "skills"],
 });
 assert.equal(fileConfig.cloudflareAccess.enabled, false);
 assert.deepEqual(fileConfig.allowedHosts, [

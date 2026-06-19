@@ -53,6 +53,7 @@ import {
 } from "./notebooklm-auth-refresh.js";
 import { defaultNotebookLmBrowserStatePath } from "./notebooklm-discovery.js";
 import { registerNotebookLmTools } from "./notebooklm-tools.js";
+import { registerQnoteTools } from "./qnote-tools.js";
 
 type Transport = StreamableHTTPServerTransport;
 const WORKSPACE_APP_URI = "ui://devspace/workspace-app.html";
@@ -221,12 +222,15 @@ function serverInstructions(config: ServerConfig, toolNames: ToolNames): string 
   const notebooklm = config.notebooklm.enabled
     ? " NotebookLM tools are available by default for asking user-provided NotebookLM notebooks, managing the local NotebookLM library, and checking NotebookLM auth health. NotebookLM is best-effort: failures in that bridge do not affect workspace tools."
     : "";
+  const qnote = config.qnote.enabled
+    ? " Qnote tools are available for searching and capturing summarized private knowledge, lessons, skills, and AI assistant history summaries. Use qnote_history to inspect local Claude, Codex, Cursor, ChatGPT export, and browser history sources before storing distilled Markdown with qnote_capture."
+    : "";
 
   const shellGuidance = config.shellEnabled
     ? `, and ${toolNames.shell} for tests, builds, git inspection, package scripts, and commands that are better executed by the shell. Do not create or modify files with ${toolNames.shell}; avoid shell redirection, heredocs, tee, sed -i, perl -i, node/python/ruby scripts, or any command whose purpose is to write project files`
     : ". Shell execution is disabled for this server";
 
-  return `Use DevSpace as a local coding workspace. Call ${toolNames.openWorkspace} once per project folder or worktree to obtain a workspaceId. Reuse that same workspaceId for all later file, search, edit, write, show-changes, and enabled shell tools in that folder; do not call ${toolNames.openWorkspace} again unless switching folders/worktrees, changing checkout/worktree mode, the workspaceId is rejected as unknown, or the user explicitly asks to reopen. ${agentsMd}${skills}${inspection}Prefer ${toolNames.edit} for targeted modifications, ${toolNames.write} only for new files or complete rewrites${shellGuidance}.${showChanges}${notebooklm}`;
+  return `Use DevSpace as a local coding workspace. Call ${toolNames.openWorkspace} once per project folder or worktree to obtain a workspaceId. Reuse that same workspaceId for all later file, search, edit, write, show-changes, and enabled shell tools in that folder; do not call ${toolNames.openWorkspace} again unless switching folders/worktrees, changing checkout/worktree mode, the workspaceId is rejected as unknown, or the user explicitly asks to reopen. ${agentsMd}${skills}${inspection}Prefer ${toolNames.edit} for targeted modifications, ${toolNames.write} only for new files or complete rewrites${shellGuidance}.${showChanges}${notebooklm}${qnote}`;
 }
 function resultOutputSchema(extra: z.ZodRawShape = {}): z.ZodRawShape {
   return {
@@ -669,6 +673,7 @@ export function createMcpServer(
   );
 
   registerNotebookLmTools(server, config, notebookLmClientFactory);
+  registerQnoteTools(server, config);
 
   registerAppResource(
     server,
