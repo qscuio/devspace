@@ -2,11 +2,11 @@ import { randomBytes } from "node:crypto";
 import {
   existsSync,
   mkdirSync,
-  readFileSync,
   writeFileSync,
 } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
+import { parseJsonFile } from "./json-file.js";
 import { expandHomePath } from "./roots.js";
 
 export interface DevspaceUserConfig {
@@ -108,12 +108,7 @@ export function generateOwnerToken(): string {
 }
 
 function readJsonFile<T>(filePath: string): T {
-  try {
-    return JSON.parse(readFileSync(filePath, "utf8")) as T;
-  } catch (error) {
-    const reason = error instanceof Error ? error.message : String(error);
-    throw new Error(`Unable to read ${filePath}: ${reason}`);
-  }
+  return parseJsonFile<T>(filePath);
 }
 
 function writeJsonFile(filePath: string, value: unknown, mode: number): void {

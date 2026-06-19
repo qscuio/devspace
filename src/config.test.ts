@@ -184,7 +184,7 @@ assert.deepEqual(
 const configDir = mkdtempSync(join(tmpdir(), "devspace-config-test-"));
 writeFileSync(
   join(configDir, "config.json"),
-  JSON.stringify({
+  `\uFEFF${JSON.stringify({
     port: 8787,
     allowedRoots: [process.cwd()],
     publicBaseUrl: "https://devspace.example.com",
@@ -201,13 +201,13 @@ writeFileSync(
       dataDir: "C:\\tmp\\persisted-notebooklm",
       sessionTtlSeconds: 120,
     },
-  }),
+  })}`,
 );
 writeFileSync(
   join(configDir, "auth.json"),
-  JSON.stringify({
+  `\uFEFF${JSON.stringify({
     ownerToken: "persisted-owner-token-long-enough",
-  }),
+  })}`,
 );
 
 const fileConfig = loadConfig({ DEVSPACE_CONFIG_DIR: configDir });

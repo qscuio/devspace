@@ -12,6 +12,7 @@ import type {
   OAuthTokens,
 } from "@modelcontextprotocol/sdk/shared/auth.js";
 import { checkResourceAllowed, resourceUrlFromServerUrl } from "@modelcontextprotocol/sdk/shared/auth-utils.js";
+import { parseJsonFile } from "./json-file.js";
 
 export interface OAuthConfig {
   ownerToken: string;
@@ -249,13 +250,10 @@ export class InMemoryOAuthClientsStore implements OAuthRegisteredClientsStore {
   private loadPersistedClients(): void {
     if (!this.clientStorePath || !existsSync(this.clientStorePath)) return;
 
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(readFileSync(this.clientStorePath, "utf8"));
-    } catch (error) {
-      const reason = error instanceof Error ? error.message : String(error);
-      throw new Error(`Unable to read OAuth client store ${this.clientStorePath}: ${reason}`);
-    }
+    const parsed = parseJsonFile<unknown>(
+      this.clientStorePath,
+      `OAuth client store ${this.clientStorePath}`,
+    );
 
     if (!isOAuthClientsFile(parsed)) {
       throw new Error(`Invalid OAuth client store ${this.clientStorePath}`);
@@ -470,13 +468,10 @@ export class SingleUserOAuthProvider implements OAuthServerProvider {
   private loadPersistedTokens(): void {
     if (!this.tokenStorePath || !existsSync(this.tokenStorePath)) return;
 
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(readFileSync(this.tokenStorePath, "utf8"));
-    } catch (error) {
-      const reason = error instanceof Error ? error.message : String(error);
-      throw new Error(`Unable to read OAuth token store ${this.tokenStorePath}: ${reason}`);
-    }
+    const parsed = parseJsonFile<unknown>(
+      this.tokenStorePath,
+      `OAuth token store ${this.tokenStorePath}`,
+    );
 
     if (!isOAuthTokensFile(parsed)) {
       throw new Error(`Invalid OAuth token store ${this.tokenStorePath}`);

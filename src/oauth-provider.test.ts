@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Response } from "express";
@@ -20,6 +20,7 @@ const registered = firstStore.registerClient({
   response_types: ["code"],
 });
 
+writeFileSync(clientStorePath, `\uFEFF${readFileSync(clientStorePath, "utf8")}`);
 const restartedStore = new InMemoryOAuthClientsStore(["chatgpt.com"], clientStorePath);
 assert.deepEqual(restartedStore.getClient(registered.client_id), registered);
 
@@ -60,6 +61,7 @@ const issuedTokens = await firstProvider.exchangeAuthorizationCode(
 );
 assert.ok(issuedTokens.refresh_token);
 
+writeFileSync(tokenStorePath, `\uFEFF${readFileSync(tokenStorePath, "utf8")}`);
 const restartedProvider = new SingleUserOAuthProvider(
   providerConfig,
   providerUrl,
