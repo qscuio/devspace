@@ -58,8 +58,17 @@ jobs:
           fi
 
           install -m 700 -d ~/.ssh
-          printf '%s\n' "${UBUNTU_SSH_PRIVATE_KEY}" > ~/.ssh/devspace_ubuntu
-          chmod 600 ~/.ssh/devspace_ubuntu
+          key_file="$HOME/.ssh/devspace_ubuntu"
+          key="${UBUNTU_SSH_PRIVATE_KEY//$'\r'/}"
+          key="${key//\\n/$'\n'}"
+          printf '%s\n' "${key}" > "${key_file}"
+          chmod 600 "${key_file}"
+          if ! ssh-keygen -y -f "${key_file}" >/dev/null 2>&1; then
+            echo "UBUNTU_SSH_PRIVATE_KEY is not a parseable OpenSSH private key." >&2
+            echo "Store the full private key in the GitHub secret, including BEGIN/END lines." >&2
+            echo "If you copied it as a single line with literal \\n separators, this workflow normalizes that format." >&2
+            exit 1
+          fi
           ssh-keyscan -p "${UBUNTU_PORT}" -H "${UBUNTU_HOST}" >> ~/.ssh/known_hosts
 
       - name: Deploy service
