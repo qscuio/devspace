@@ -114,6 +114,26 @@ async function createRepo(): Promise<string> {
 }
 
 {
+  const sourceDir = await createRepo();
+  const cloneDir = join(mkdtempSync(join(tmpdir(), "devspace-qnote-missing-test-")), "qnote");
+  const store = createQnoteStore({
+    enabled: true,
+    dir: cloneDir,
+    repoUrl: sourceDir,
+    branch: "main",
+    autoPush: false,
+    allowedDirs: ["knowledge"],
+  });
+
+  const search = await store.search({ query: "needle", limit: 5 });
+  assert.equal(search.matches.length, 1);
+  assert.equal(search.matches[0]?.path, "knowledge/existing.md");
+
+  const read = await store.read({ path: "knowledge/existing.md" });
+  assert.match(read.content, /needle content/);
+}
+
+{
   const dir = await createRepo();
   writeFileSync(join(dir, "knowledge", "dirty.md"), "uncommitted\n");
   const store = createQnoteStore({

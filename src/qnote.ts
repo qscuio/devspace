@@ -132,7 +132,7 @@ class FileQnoteStore implements QnoteStore {
   }
 
   async search(input: QnoteSearchInput): Promise<QnoteSearchResult> {
-    await this.assertRepoExists();
+    await this.ensureRepoAvailable();
     const query = input.query.toLowerCase();
     const matches: QnoteSearchResult["matches"] = [];
     const limit = input.limit ?? 20;
@@ -153,7 +153,7 @@ class FileQnoteStore implements QnoteStore {
   }
 
   async read(input: QnoteReadInput): Promise<QnoteReadResult> {
-    await this.assertRepoExists();
+    await this.ensureRepoAvailable();
     const absolutePath = this.resolveRepoPath(input.path, false);
     const maxBytes = input.maxBytes ?? 128 * 1024;
     const content = await readFile(absolutePath, "utf8");
@@ -209,6 +209,15 @@ class FileQnoteStore implements QnoteStore {
       throw new Error(`qnote repository does not exist: ${this.config.dir}`);
     }
     await this.git(["rev-parse", "--is-inside-work-tree"]);
+  }
+
+  private async ensureRepoAvailable(): Promise<void> {
+    if (!existsSync(this.config.dir)) {
+      await this.sync();
+      return;
+    }
+
+    await this.assertRepoExists();
   }
 
   private async assertClean(): Promise<void> {
