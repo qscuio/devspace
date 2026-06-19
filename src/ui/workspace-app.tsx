@@ -17,6 +17,8 @@ import {
   isToolResultCard,
   isWriteTool,
   payloadText,
+  progressActionLabel,
+  progressDetailLabel,
   summaryNumber,
   type HostContext,
   type ToolName,
@@ -42,6 +44,25 @@ interface MountedPayload {
   unmount(): void;
 }
 
+type ToolProgressPhase = "preparing" | "running" | "cancelled";
+
+interface ToolProgressState {
+  phase: ToolProgressPhase;
+  tool?: ToolName;
+  args?: Record<string, unknown>;
+  reason?: string;
+  startedAt: number;
+  updatedAt: number;
+}
+
+interface ToolInputParams {
+  arguments?: Record<string, unknown>;
+}
+
+interface ToolCancelledParams {
+  reason?: string;
+}
+
 let app: App | null = null;
 let connected = false;
 let connectionError: string | null = null;
@@ -53,6 +74,10 @@ let reviewDetailPath: string | null = null;
 let errorMessage: string | null = null;
 let currentPayload: MountedPayload | null = null;
 let currentPayloadContainer: HTMLElement | null = null;
+let toolProgress: ToolProgressState | null = null;
+let progressTimer: number | null = null;
+
+const PROGRESS_REFRESH_MS = 1000;
 
 const maybeAppRoot = document.querySelector<HTMLElement>("#app");
 
@@ -72,7 +97,16 @@ async function boot(): Promise<void> {
     {},
   );
 
+  app.ontoolinputpartial = (params) => {
+    updateToolProgress("preparing", params as ToolInputParams);
+  };
+
+  app.ontoolinput = (params) => {
+    updateToolProgress("running", params as ToolInputParams);
+  };
+
   app.ontoolresult = (result) => {
+    clearToolProgress();
     const structuredContent = getStructuredContent<Partial<ToolResultCard>>(result);
     const metaCard = cardFromMeta(result);
     const structured = metaCard
@@ -103,11 +137,17 @@ async function boot(): Promise<void> {
       ...hostContext,
       ...ctx,
     };
+    refreshProgressToolFromHostContext();
     applyHostContext();
     renderPayloadIfNeeded();
   };
 
+  app.ontoolcancelled = (params) => {
+    markToolProgressCancelled(params as ToolCancelledParams);
+  };
+
   app.onteardown = async () => {
+    clearToolProgress();
     unmountPayload();
     return {};
   };
@@ -152,6 +192,11 @@ function render(): void {
 
   if (!connected) {
     renderEmpty("Connecting to host...");
+    return;
+  }
+
+  if (toolProgress) {
+    renderToolProgress(toolProgress);
     return;
   }
 
@@ -214,10 +259,172 @@ function render(): void {
   renderPayloadIfNeeded();
 }
 
+function renderToolProgress(progress: ToolProgressState): void {
+  const display = getProgressDisplay(progress);
+  const elapsedSeconds = Math.max(0, Math.floor((Date.now() - progress.startedAt) / 1000));
+  const main = element("main", { className: "shell" });
+  const section = element("section", {
+    className: `tool-card progress ${progress.phase === "cancelled" ? "cancelled" : display.tone}`,
+  });
+  const header = element("div", { className: "tool-header progress-header" });
+  const icon = element("span", { className: "tool-icon", ariaHidden: "true" });
+  icon.innerHTML = display.icon;
+  const toolMain = element("span", { className: "tool-main" });
+  const title = element("span", {
+    className: "tool-title",
+    text: progress.phase === "cancelled" ? "Tool Cancelled" : display.title,
+  });
+  const label = element("span", {
+    className: "tool-label",
+    text: display.label,
+    title: display.label,
+  });
+  const badge = element("span", {
+    className: "badge",
+    text: progress.phase === "cancelled" ? "cancelled" : `${elapsedSeconds}s`,
+  });
+
+  toolMain.append(title, label);
+  header.append(icon, toolMain, badge, element("span", { className: "chevron" }));
+
+  const body = element("div", { className: "progress-body" });
+  const lineText = progress.phase === "cancelled"
+    ? progress.reason ?? "The host cancelled this tool run."
+    : progress.phase === "preparing"
+      ? "Receiving tool input..."
+      : "Tool is running...";
+  body.append(
+    element("div", {
+      className: `progress-line ${progress.phase === "cancelled" ? "cancelled" : ""}`,
+      text: lineText,
+    }),
+    renderProgressBar(progress.phase),
+  );
+
+  section.append(header, body);
+  main.append(section);
+  appRoot.replaceChildren(main);
+}
+
+function getProgressDisplay(progress: ToolProgressState): ToolDisplay {
+  const title = progressActionLabel(progress.tool);
+  const label = progressDetailLabel(progress.tool, progress.args);
+  const tone = getProgressTone(progress.tool);
+  return { icon: getProgressIcon(progress.tool), title, label, tone };
+}
+
+function getProgressTone(tool: ToolName | undefined): string {
+  if (!tool) return "running";
+  if (isReviewTool(tool)) return "review";
+  if (isShellTool(tool)) return "shell";
+  if (isSearchTool(tool)) return "search";
+  if (isReadTool(tool)) return "read";
+  if (isWriteTool(tool)) return "write";
+  if (isEditTool(tool)) return "edit";
+  if (tool === "open_workspace") return "workspace";
+  return "running";
+}
+
+function getProgressIcon(tool: ToolName | undefined): string {
+  if (!tool) return clockIcon();
+  if (isReviewTool(tool)) return reviewIcon();
+  if (isShellTool(tool)) return terminalIcon();
+  if (isSearchTool(tool)) return searchIcon();
+  if (isReadTool(tool)) return fileIcon();
+  if (isWriteTool(tool)) return filePlusIcon();
+  if (isEditTool(tool)) return editIcon();
+  if (tool === "open_workspace") return folderIcon();
+  if (tool === "list_directory" || tool === "ls") return listIcon();
+  if (tool === "find_files" || tool === "glob") return filesIcon();
+  return clockIcon();
+}
+
+function renderProgressBar(phase: ToolProgressPhase): HTMLElement {
+  const bar = element("div", {
+    className: `progress-bar ${phase === "cancelled" ? "cancelled" : ""}`,
+    ariaHidden: "true",
+  });
+  bar.append(element("span"));
+  return bar;
+}
+
 function renderEmpty(message: string, tone: "muted" | "error" = "muted"): void {
   const main = element("main", { className: "shell" });
   main.append(element("section", { className: `empty ${tone}`, text: message }));
   appRoot.replaceChildren(main);
+}
+
+function updateToolProgress(phase: ToolProgressPhase, params: ToolInputParams): void {
+  const now = Date.now();
+  toolProgress = {
+    phase,
+    tool: currentHostToolName() ?? toolProgress?.tool,
+    args: params.arguments ?? toolProgress?.args,
+    startedAt: toolProgress?.startedAt ?? now,
+    updatedAt: now,
+  };
+  card = null;
+  expanded = false;
+  reviewFilesExpanded = false;
+  reviewDetailPath = null;
+  errorMessage = null;
+  startProgressTimer();
+  render();
+}
+
+function markToolProgressCancelled(params: ToolCancelledParams): void {
+  const now = Date.now();
+  toolProgress = {
+    phase: "cancelled",
+    tool: currentHostToolName() ?? toolProgress?.tool,
+    args: toolProgress?.args,
+    reason: params.reason,
+    startedAt: toolProgress?.startedAt ?? now,
+    updatedAt: now,
+  };
+  card = null;
+  errorMessage = null;
+  stopProgressTimer();
+  render();
+}
+
+function refreshProgressToolFromHostContext(): void {
+  if (!toolProgress || toolProgress.tool) return;
+  const tool = currentHostToolName();
+  if (!tool) return;
+  toolProgress = {
+    ...toolProgress,
+    tool,
+    updatedAt: Date.now(),
+  };
+  render();
+}
+
+function currentHostToolName(): ToolName | undefined {
+  const name = hostContext?.toolInfo?.tool?.name;
+  return isToolName(name) ? name : undefined;
+}
+
+function startProgressTimer(): void {
+  if (progressTimer) return;
+  progressTimer = window.setInterval(() => {
+    if (!toolProgress || toolProgress.phase === "cancelled") {
+      stopProgressTimer();
+      return;
+    }
+    render();
+  }, PROGRESS_REFRESH_MS);
+}
+
+function stopProgressTimer(): void {
+  if (!progressTimer) return;
+  window.clearInterval(progressTimer);
+  progressTimer = null;
+}
+
+function clearToolProgress(): void {
+  toolProgress = null;
+  stopProgressTimer();
 }
 
 async function renderPayloadIfNeeded(): Promise<void> {
@@ -683,4 +890,8 @@ function terminalIcon(): string {
 
 function reviewIcon(): string {
   return iconSvg('<path d="M5 4h14v16H5z" /><path d="M8 8h8" /><path d="M8 12h5" /><path d="M8 16h7" />');
+}
+
+function clockIcon(): string {
+  return iconSvg('<circle cx="12" cy="12" r="8" /><path d="M12 8v5l3 2" />');
 }

@@ -62,6 +62,10 @@ body {
   cursor: default;
 }
 
+.progress-header {
+  cursor: default;
+}
+
 .tool-icon {
   display: grid;
   width: 38px;
@@ -190,6 +194,57 @@ body {
 .tool-body {
   border-top: 1px solid var(--color-border-primary, #3a3a40);
   background: var(--color-background-primary, #18191d);
+}
+
+.progress-body {
+  display: grid;
+  gap: 10px;
+  padding: 0 14px 14px;
+}
+
+.progress-line {
+  color: var(--color-text-secondary, #b7b7bf);
+  font-size: var(--font-text-sm-size, 13px);
+}
+
+.progress-line.cancelled {
+  color: var(--color-danger-text, #ee7676);
+}
+
+.progress-bar {
+  position: relative;
+  overflow: hidden;
+  height: 4px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--color-border-primary, #3a3a40) 64%, transparent);
+}
+
+.progress-bar span {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: -35%;
+  width: 35%;
+  border-radius: inherit;
+  background: color-mix(in srgb, var(--color-text-primary, #f5f5f6) 72%, transparent);
+  animation: progress-slide 1.35s ease-in-out infinite;
+}
+
+.progress-bar.cancelled span {
+  left: 0;
+  width: 100%;
+  background: color-mix(in srgb, var(--color-danger-text, #ee7676) 64%, transparent);
+  animation: none;
+}
+
+@keyframes progress-slide {
+  0% {
+    transform: translateX(0);
+  }
+
+  100% {
+    transform: translateX(385%);
+  }
 }
 
 .review-header {

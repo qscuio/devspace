@@ -109,6 +109,73 @@ export function isReviewTool(tool: ToolName): boolean {
   return tool === "show_changes";
 }
 
+export function progressActionLabel(tool: ToolName | undefined): string {
+  switch (tool) {
+    case "open_workspace":
+      return "Opening Workspace";
+    case "read_file":
+    case "read":
+      return "Reading File";
+    case "write_file":
+    case "write":
+      return "Writing File";
+    case "edit_file":
+    case "edit":
+      return "Editing File";
+    case "grep_files":
+    case "grep":
+      return "Searching Files";
+    case "find_files":
+    case "glob":
+      return "Finding Files";
+    case "list_directory":
+    case "ls":
+      return "Listing Directory";
+    case "run_shell":
+    case "bash":
+      return "Running Bash";
+    case "show_changes":
+      return "Preparing Review";
+    default:
+      return "Running Tool";
+  }
+}
+
+export function progressDetailLabel(
+  tool: ToolName | undefined,
+  args: Record<string, unknown> | undefined,
+): string {
+  const detail = preferredProgressDetail(tool, args);
+  return detail ? truncateProgressDetail(detail) : "Waiting for tool progress...";
+}
+
+function preferredProgressDetail(
+  tool: ToolName | undefined,
+  args: Record<string, unknown> | undefined,
+): string | undefined {
+  if (!args) return undefined;
+  if (isShellProgressTool(tool)) return stringValue(args.command);
+
+  return (
+    stringValue(args.path) ??
+    stringValue(args.root) ??
+    stringValue(args.pattern) ??
+    stringValue(args.command)
+  );
+}
+
+function isShellProgressTool(tool: ToolName | undefined): boolean {
+  return tool === "run_shell" || tool === "bash";
+}
+
+function stringValue(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value : undefined;
+}
+
+function truncateProgressDetail(value: string): string {
+  return value.length > 140 ? `${value.slice(0, 137)}...` : value;
+}
+
 export function isToolResultCard(value: unknown): value is Omit<ToolResultCard, "tool"> {
   return Boolean(value && typeof value === "object");
 }
