@@ -28,7 +28,6 @@ interface AuthorizationCodeRecord {
 }
 
 interface AccessTokenRecord {
-  token: string;
   clientId: string;
   scopes: string[];
   expiresAt: number;
@@ -36,11 +35,18 @@ interface AccessTokenRecord {
 }
 
 interface RefreshTokenRecord {
-  token: string;
   clientId: string;
   scopes: string[];
   expiresAt: number;
   resource?: URL;
+}
+
+interface PersistedTokenRecord {
+  hash: string;
+  clientId: string;
+  scopes: string[];
+  expiresAt: number;
+  resource?: string;
 }
 
 const CODE_TTL_MS = 5 * 60 * 1000;
@@ -161,6 +167,45 @@ function isOAuthClientInformationFull(value: unknown): value is OAuthClientInfor
   );
 }
 
+function isOAuthTokensFile(value: unknown): value is {
+  accessTokens?: PersistedTokenRecord[];
+  refreshTokens?: PersistedTokenRecord[];
+} {
+  if (!value || typeof value !== "object") return false;
+  const file = value as {
+    accessTokens?: unknown;
+    refreshTokens?: unknown;
+  };
+  return (
+    tokenRecordListValid(file.accessTokens) &&
+    tokenRecordListValid(file.refreshTokens)
+  );
+}
+
+function tokenRecordListValid(value: unknown): value is PersistedTokenRecord[] | undefined {
+  return value === undefined || (Array.isArray(value) && value.every(isPersistedTokenRecord));
+}
+
+function isPersistedTokenRecord(value: unknown): value is PersistedTokenRecord {
+  if (!value || typeof value !== "object") return false;
+  const record = value as {
+    hash?: unknown;
+    clientId?: unknown;
+    scopes?: unknown;
+    expiresAt?: unknown;
+    resource?: unknown;
+  };
+  return (
+    typeof record.hash === "string" &&
+    typeof record.clientId === "string" &&
+    Array.isArray(record.scopes) &&
+    record.scopes.every((scope) => typeof scope === "string") &&
+    typeof record.expiresAt === "number" &&
+    Number.isFinite(record.expiresAt) &&
+    (record.resource === undefined || typeof record.resource === "string")
+  );
+}
+
 export class InMemoryOAuthClientsStore implements OAuthRegisteredClientsStore {
   private readonly clients = new Map<string, OAuthClientInformationFull>();
 
@@ -248,9 +293,11 @@ export class SingleUserOAuthProvider implements OAuthServerProvider {
     private readonly config: OAuthConfig,
     resourceServerUrl: URL,
     clientStorePath?: string,
+    private readonly tokenStorePath?: string,
   ) {
     this.resourceServerUrl = resourceUrlFromServerUrl(resourceServerUrl);
     this.clientsStore = new InMemoryOAuthClientsStore(config.allowedRedirectHosts, clientStorePath);
+    this.loadPersistedTokens();
   }
 
   async authorize(
@@ -353,6 +400,7 @@ export class SingleUserOAuthProvider implements OAuthServerProvider {
     }
 
     this.refreshTokens.delete(hashToken(refreshToken));
+    this.persistTokens();
     return this.issueTokens(client.client_id, requestedScopes, resource ?? record.resource);
   }
 
@@ -375,6 +423,7 @@ export class SingleUserOAuthProvider implements OAuthServerProvider {
     const hashed = hashToken(request.token);
     this.accessTokens.delete(hashed);
     this.refreshTokens.delete(hashed);
+    this.persistTokens();
   }
 
   private validCodeRecord(
@@ -396,19 +445,18 @@ export class SingleUserOAuthProvider implements OAuthServerProvider {
     const refreshExpiresAt = now + this.config.refreshTokenTtlSeconds;
 
     this.accessTokens.set(hashToken(accessToken), {
-      token: accessToken,
       clientId,
       scopes,
       expiresAt: accessExpiresAt,
       resource,
     });
     this.refreshTokens.set(hashToken(refreshToken), {
-      token: refreshToken,
       clientId,
       scopes,
       expiresAt: refreshExpiresAt,
       resource,
     });
+    this.persistTokens();
 
     return {
       access_token: accessToken,
@@ -417,6 +465,98 @@ export class SingleUserOAuthProvider implements OAuthServerProvider {
       refresh_token: refreshToken,
       scope: scopes.join(" "),
     };
+  }
+
+  private loadPersistedTokens(): void {
+    if (!this.tokenStorePath || !existsSync(this.tokenStorePath)) return;
+
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(readFileSync(this.tokenStorePath, "utf8"));
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      throw new Error(`Unable to read OAuth token store ${this.tokenStorePath}: ${reason}`);
+    }
+
+    if (!isOAuthTokensFile(parsed)) {
+      throw new Error(`Invalid OAuth token store ${this.tokenStorePath}`);
+    }
+
+    const now = Math.floor(Date.now() / 1000);
+    for (const [hash, record] of loadTokenRecords(parsed.accessTokens ?? [], now)) {
+      this.accessTokens.set(hash, record);
+    }
+    for (const [hash, record] of loadTokenRecords(parsed.refreshTokens ?? [], now)) {
+      this.refreshTokens.set(hash, record);
+    }
+  }
+
+  private persistTokens(): void {
+    if (!this.tokenStorePath) return;
+
+    mkdirSync(dirname(this.tokenStorePath), { recursive: true });
+    const tempPath = `${this.tokenStorePath}.${process.pid}.${randomUUID()}.tmp`;
+    writeFileSync(
+      tempPath,
+      JSON.stringify(
+        {
+          accessTokens: dumpTokenRecords(this.accessTokens),
+          refreshTokens: dumpTokenRecords(this.refreshTokens),
+        },
+        null,
+        2,
+      ) + "\n",
+      { mode: 0o600 },
+    );
+    renameSync(tempPath, this.tokenStorePath);
+  }
+}
+
+function loadTokenRecords(
+  records: PersistedTokenRecord[],
+  now: number,
+): Array<[string, AccessTokenRecord]> {
+  const loaded: Array<[string, AccessTokenRecord]> = [];
+  for (const record of records) {
+    if (record.expiresAt < now) continue;
+
+    const resource = parsePersistedResource(record.resource);
+    if (record.resource && !resource) continue;
+
+    loaded.push([
+      record.hash,
+      {
+        clientId: record.clientId,
+        scopes: record.scopes,
+        expiresAt: record.expiresAt,
+        resource,
+      },
+    ]);
+  }
+  return loaded;
+}
+
+function dumpTokenRecords<T extends AccessTokenRecord>(
+  records: Map<string, T>,
+): PersistedTokenRecord[] {
+  const now = Math.floor(Date.now() / 1000);
+  return Array.from(records.entries())
+    .filter(([, record]) => record.expiresAt >= now)
+    .map(([hash, record]) => ({
+      hash,
+      clientId: record.clientId,
+      scopes: record.scopes,
+      expiresAt: record.expiresAt,
+      resource: record.resource?.href,
+    }));
+}
+
+function parsePersistedResource(value: string | undefined): URL | undefined {
+  if (!value) return undefined;
+  try {
+    return new URL(value);
+  } catch {
+    return undefined;
   }
 }
 

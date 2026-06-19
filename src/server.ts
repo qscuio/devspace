@@ -1293,6 +1293,7 @@ export function createServer(config = loadConfig()): RunningServer {
     config.oauth,
     mcpUrl,
     join(config.stateDir, "oauth-clients.json"),
+    join(config.stateDir, "oauth-tokens.json"),
   );
   const bearerAuth = requireBearerAuth({
     verifier: oauthProvider,
