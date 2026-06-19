@@ -302,21 +302,31 @@ export class NotebookLmWorkflows {
       };
     }
 
-    const cards = await this.deps.discoverer.discover({ limit: input.limit ?? 20 });
-    const imported: NotebookRecord[] = [];
-    for (const card of cards) {
-      imported.push(await this.deps.library.upsert({
-        url: card.url,
-        name: card.name,
-        aliases: [],
-        description: "",
-        topics: [],
-        tags: input.tag ? [input.tag] : [],
-        source: "discovered",
-        discoveredAt: new Date().toISOString(),
-      }));
+    try {
+      const cards = await this.deps.discoverer.discover({ limit: input.limit ?? 20 });
+      const imported: NotebookRecord[] = [];
+      for (const card of cards) {
+        const resolved = await this.deps.library.resolve({ notebookUrl: card.url });
+        const existing = resolved.status === "matched" ? resolved.notebook : undefined;
+        imported.push(await this.deps.library.upsert({
+          url: card.url,
+          name: existing?.name ?? card.name,
+          aliases: existing?.aliases ?? [],
+          description: existing?.description ?? "",
+          topics: existing?.topics ?? [],
+          tags: [...(existing?.tags ?? []), ...(input.tag ? [input.tag] : [])],
+          source: existing?.source ?? "discovered",
+          discoveredAt: new Date().toISOString(),
+        }));
+      }
+      return { status: "ok", imported: imported.length, notebooks: imported };
+    } catch (error) {
+      return {
+        status: "browser_failed",
+        message: error instanceof Error ? error.message : String(error),
+        repairHint: "Ask by notebook URL or configure the discovery adapter.",
+      };
     }
-    return { status: "ok", imported: imported.length, notebooks: imported };
   }
 
   private async askAndSave(input: {

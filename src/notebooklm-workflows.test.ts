@@ -82,6 +82,56 @@ const missingDiscovery = await workflows.discover({});
 assert.equal(missingDiscovery.status, "browser_failed");
 assert.equal(missingDiscovery.message, "NotebookLM account discovery is not configured.");
 
+const preservationDataDir = mkdtempSync(join(tmpdir(), "devspace-notebooklm-workflows-preservation-test-"));
+const preservationLibrary = new NotebookLmLibraryStore(preservationDataDir);
+const preservationSessions = new NotebookLmSessionStore(preservationDataDir, 900);
+await preservationLibrary.upsert({
+  url: "https://notebooklm.google.com/notebook/abc",
+  name: "Curated DNX",
+  aliases: ["dnx"],
+  description: "Curated description",
+  topics: ["DNX"],
+  tags: ["curated"],
+  source: "manual",
+});
+const preservationWorkflows = new NotebookLmWorkflows({
+  library: preservationLibrary,
+  sessions: preservationSessions,
+  client,
+  dataDir: preservationDataDir,
+  discoverer: {
+    async discover() {
+      return [{ name: "Discovered DNX", url: "https://notebooklm.google.com/notebook/abc?pli=1" }];
+    },
+  },
+});
+const preservationResult = await preservationWorkflows.discover({ tag: "discovered" });
+assert.equal(preservationResult.status, "ok");
+const [preserved] = await preservationLibrary.list();
+assert.equal(preserved?.name, "Curated DNX");
+assert.equal(preserved?.description, "Curated description");
+assert.equal(preserved?.source, "manual");
+assert.deepEqual(preserved?.aliases, ["dnx"]);
+assert.deepEqual(preserved?.topics, ["DNX"]);
+assert.deepEqual(preserved?.tags, ["curated", "discovered"]);
+
+const throwingDataDir = mkdtempSync(join(tmpdir(), "devspace-notebooklm-workflows-throwing-test-"));
+const throwingDiscoveryWorkflows = new NotebookLmWorkflows({
+  library: new NotebookLmLibraryStore(throwingDataDir),
+  sessions: new NotebookLmSessionStore(throwingDataDir, 900),
+  client,
+  dataDir: throwingDataDir,
+  discoverer: {
+    async discover() {
+      throw new Error("browser profile unavailable");
+    },
+  },
+});
+const throwingDiscovery = await throwingDiscoveryWorkflows.discover({});
+assert.equal(throwingDiscovery.status, "browser_failed");
+assert.match(throwingDiscovery.message, /browser profile unavailable/);
+assert.equal(throwingDiscovery.repairHint, "Ask by notebook URL or configure the discovery adapter.");
+
 const ambiguous = await workflows.research({ question: "How?", notebook: "Broadcom" });
 assert.equal(ambiguous.status, "ambiguous_notebook");
 assert.equal(ambiguous.candidates?.length, 2);
