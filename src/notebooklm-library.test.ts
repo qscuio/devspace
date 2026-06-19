@@ -14,6 +14,10 @@ assert.equal(
   normalizeNotebookUrl("https://notebooklm.google.com/notebook/abc?pli=1#x"),
   "https://notebooklm.google.com/notebook/abc",
 );
+assert.equal(
+  normalizeNotebookUrl("https://notebooklm.google.com/notebook/abc/"),
+  "https://notebooklm.google.com/notebook/abc",
+);
 
 const first = await store.upsert({
   url: "https://notebooklm.google.com/notebook/abc?pli=1",
@@ -37,7 +41,10 @@ const second = await store.upsert({
 });
 assert.equal(second.id, "abc");
 assert.deepEqual(second.aliases.sort(), ["dnx", "jericho"]);
+assert.equal(second.description, "Updated");
+assert.equal(second.source, "discovered");
 assert.deepEqual(second.tags.sort(), ["broadcom", "dnx", "sdk"]);
+assert.deepEqual(second.topics.sort(), ["Broadcom DNX", "OAM", "Traffic Management"]);
 
 const records = await store.list();
 assert.equal(records.length, 1);
