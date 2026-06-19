@@ -10,6 +10,7 @@ import {
   type NotebookLmResearchInput,
   type NotebookLmStatusInput,
 } from "./notebooklm-workflows.js";
+import { BrowserNotebookLmDiscoverer } from "./notebooklm-discovery.js";
 import type { NotebookLmClient, NotebookLmClientFactory } from "./notebooklm.js";
 
 type NotebookLmLibraryToolInput = Omit<NotebookLmLibraryInput, "action"> & {
@@ -36,6 +37,7 @@ export function registerNotebookLmTools(
     sessions,
     client: managedClient.client,
     dataDir,
+    discoverer: new BrowserNotebookLmDiscoverer(),
   });
 
   server.registerTool(

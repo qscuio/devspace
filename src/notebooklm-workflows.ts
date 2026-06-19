@@ -321,10 +321,11 @@ export class NotebookLmWorkflows {
       }
       return { status: "ok", imported: imported.length, notebooks: imported };
     } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
       return {
         status: "browser_failed",
-        message: error instanceof Error ? error.message : String(error),
-        repairHint: "Ask by notebook URL or configure the discovery adapter.",
+        message,
+        repairHint: notebookLmDiscoveryRepairHint(message),
       };
     }
   }
@@ -496,4 +497,12 @@ function notebookContains(record: NotebookRecord, query: string): boolean {
     ...record.topics,
     ...record.tags,
   ].some((value) => value.toLowerCase().includes(query));
+}
+
+function notebookLmDiscoveryRepairHint(message: string): string {
+  const lower = message.toLowerCase();
+  if (lower.includes("not authenticated") || lower.includes("accounts.google.com")) {
+    return "Upload a fresh NotebookLM browser state from the current PC or authenticate the VPS browser profile, then retry discovery.";
+  }
+  return "Ask by notebook URL or configure the discovery adapter.";
 }

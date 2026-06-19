@@ -1,5 +1,8 @@
 import assert from "node:assert/strict";
-import { extractNotebookCardsFromHtml } from "./notebooklm-discovery.js";
+import {
+  extractNotebookCardsFromHtml,
+  normalizeDiscoveredNotebookCards,
+} from "./notebooklm-discovery.js";
 
 const html = `
   <a href="/notebook/abc"><span>Broadcom DNX SDK</span></a>
@@ -26,4 +29,12 @@ const invalidEntityCards = extractNotebookCardsFromHtml(`
 `, "https://notebooklm.google.com");
 assert.deepEqual(invalidEntityCards, [
   { name: "Bad &#99999999; Entity", url: "https://notebooklm.google.com/notebook/entity" },
+]);
+
+assert.deepEqual(normalizeDiscoveredNotebookCards([
+  { name: "  ", url: "https://notebooklm.google.com/notebook/fallback?pli=1" },
+  { name: "Duplicate", url: "https://notebooklm.google.com/notebook/fallback" },
+  { name: "Bad", url: "not a url" },
+]), [
+  { name: "Notebook fallback", url: "https://notebooklm.google.com/notebook/fallback" },
 ]);
