@@ -18,6 +18,7 @@ import express from "express";
 import type { Request, Response } from "express";
 import * as z from "zod/v4";
 import { loadConfig, type ServerConfig, type WidgetMode } from "./config.js";
+import { createCloudflareAccessMiddleware } from "./cloudflare-access.js";
 import {
   logEvent,
   requestIp,
@@ -1297,6 +1298,8 @@ export function createServer(config = loadConfig()): RunningServer {
     app.set("trust proxy", true);
   }
 
+  app.use(createCloudflareAccessMiddleware(config.cloudflareAccess, config.logging));
+
   app.use((req, res, next) => {
     const requestId = randomUUID();
     const startedAt = performance.now();
@@ -1454,6 +1457,7 @@ if (await isMainModule()) {
     console.log(`allowed roots: ${config.allowedRoots.join(", ")}`);
     console.log("auth: oauth owner-token flow required");
     console.log(`shell tool: ${config.shellEnabled ? "enabled" : "disabled"}`);
+    console.log(`cloudflare access: ${config.cloudflareAccess.enabled ? "required" : "not required"}`);
     console.log(`logging: ${config.logging.level} ${config.logging.format}`);
     console.log(`request logging: ${config.logging.requests ? "enabled" : "disabled"}`);
     console.log(`asset logging: ${config.logging.assets ? "enabled" : "disabled"}`);

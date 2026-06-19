@@ -77,6 +77,29 @@ Prefer adding Cloudflare Access, Tailscale identity controls, or equivalent
 protection in front of public tunnels. DevSpace OAuth still protects the MCP
 endpoint, but the tunnel URL should not be treated as a secret.
 
+## Cloudflare Access
+
+For Cloudflare Tunnel deployments, create a Cloudflare Access self-hosted
+application for your DevSpace hostname before exposing the route publicly.
+Cloudflare Access is deny-by-default, so users must match an Allow policy before
+Cloudflare forwards traffic to DevSpace.
+
+DevSpace can also verify the Cloudflare Access JWT at the origin:
+
+```bash
+DEVSPACE_CLOUDFLARE_ACCESS=1 \
+DEVSPACE_CLOUDFLARE_ACCESS_TEAM_DOMAIN="team.cloudflareaccess.com" \
+DEVSPACE_CLOUDFLARE_ACCESS_AUD="your-application-aud" \
+npx @waishnav/devspace serve
+```
+
+Add `DEVSPACE_CLOUDFLARE_ACCESS_ALLOWED_EMAILS` if you want DevSpace to enforce
+specific user emails in addition to the Cloudflare policy.
+
+This does not replace DevSpace OAuth. Use both layers: Cloudflare Access decides
+who can reach the public hostname, and the DevSpace Owner password approves the
+MCP client session.
+
 ## Shell Access
 
 The shell tool is powerful by design. It is meant for tests, builds, git, and

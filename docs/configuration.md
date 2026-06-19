@@ -57,6 +57,36 @@ MCP clients discover metadata from:
 /.well-known/oauth-authorization-server
 ```
 
+## Cloudflare Access
+
+For public Cloudflare Tunnel deployments, put a Cloudflare Access self-hosted
+application in front of the public hostname and configure DevSpace to verify
+the Access JWT that Cloudflare forwards to the origin.
+
+| Variable | Purpose |
+| --- | --- |
+| `DEVSPACE_CLOUDFLARE_ACCESS` | Set to `1` to require Cloudflare Access JWT verification. |
+| `DEVSPACE_CLOUDFLARE_ACCESS_TEAM_DOMAIN` | Your Access team domain, for example `team.cloudflareaccess.com`. |
+| `DEVSPACE_CLOUDFLARE_ACCESS_AUD` | Comma-separated Access application audience tags. |
+| `DEVSPACE_CLOUDFLARE_ACCESS_ALLOWED_EMAILS` | Optional comma-separated emails allowed by DevSpace after Access succeeds. |
+
+The equivalent persisted config shape is:
+
+```json
+{
+  "cloudflareAccess": {
+    "enabled": true,
+    "teamDomain": "team.cloudflareaccess.com",
+    "audience": ["your-application-aud"],
+    "allowedEmails": ["you@example.com"]
+  }
+}
+```
+
+Cloudflare Access should still be configured in the Cloudflare Zero Trust
+dashboard. DevSpace verification is a defense-in-depth check for requests that
+reach the origin.
+
 ## Tool Modes
 
 `DEVSPACE_TOOL_NAMING` controls tool names.

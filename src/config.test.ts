@@ -26,6 +26,9 @@ assert.equal(loadConfig({ ...baseEnv, DEVSPACE_MINIMAL_TOOLS: "1" }).minimalTool
 assert.equal(loadConfig(baseEnv).skillsEnabled, true);
 assert.equal(loadConfig({ ...baseEnv, DEVSPACE_SKILLS: "0" }).skillsEnabled, false);
 assert.equal(loadConfig({ ...baseEnv, DEVSPACE_SKILLS: "1" }).skillsEnabled, true);
+assert.equal(loadConfig(baseEnv).shellEnabled, true);
+assert.equal(loadConfig({ ...baseEnv, DEVSPACE_SHELL: "0" }).shellEnabled, false);
+assert.equal(loadConfig({ ...baseEnv, DEVSPACE_SHELL: "1" }).shellEnabled, true);
 
 assert.throws(
   () => loadConfig({ ...baseEnv, DEVSPACE_WIDGETS: "invalid" }),
@@ -172,6 +175,7 @@ assert.equal(fileConfig.skillsEnabled, false);
 assert.equal(fileConfig.minimalTools, false);
 assert.equal(fileConfig.toolNaming, "legacy");
 assert.equal(fileConfig.widgets, "off");
+assert.equal(fileConfig.cloudflareAccess.enabled, false);
 assert.deepEqual(fileConfig.allowedHosts, [
   "localhost",
   "127.0.0.1",
@@ -179,3 +183,22 @@ assert.deepEqual(fileConfig.allowedHosts, [
   "devspace.example.com",
 ]);
 assert.equal(loadConfig({ DEVSPACE_CONFIG_DIR: configDir, DEVSPACE_SHELL: "1" }).shellEnabled, true);
+
+const accessConfig = loadConfig({
+  ...baseEnv,
+  DEVSPACE_CLOUDFLARE_ACCESS: "1",
+  DEVSPACE_CLOUDFLARE_ACCESS_TEAM_DOMAIN: "https://example.cloudflareaccess.com/",
+  DEVSPACE_CLOUDFLARE_ACCESS_AUD: "aud-one,aud-two",
+  DEVSPACE_CLOUDFLARE_ACCESS_ALLOWED_EMAILS: "qscuio@gmail.com",
+}).cloudflareAccess;
+assert.deepEqual(accessConfig, {
+  enabled: true,
+  teamDomain: "example.cloudflareaccess.com",
+  audience: ["aud-one", "aud-two"],
+  allowedEmails: ["qscuio@gmail.com"],
+});
+
+assert.throws(
+  () => loadConfig({ ...baseEnv, DEVSPACE_CLOUDFLARE_ACCESS: "1" }),
+  /DEVSPACE_CLOUDFLARE_ACCESS_TEAM_DOMAIN is required/,
+);

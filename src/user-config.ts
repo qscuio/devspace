@@ -23,6 +23,12 @@ export interface DevspaceUserConfig {
   stateDir?: string;
   worktreeRoot?: string;
   agentDir?: string;
+  cloudflareAccess?: {
+    enabled?: boolean;
+    teamDomain?: string;
+    audience?: string[];
+    allowedEmails?: string[];
+  };
 }
 
 export interface DevspaceAuthConfig {

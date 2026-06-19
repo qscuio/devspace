@@ -4,6 +4,7 @@ import { expandHomePath } from "./roots.js";
 import type { LoggingConfig, LogFormat, LogLevel } from "./logger.js";
 import type { OAuthConfig } from "./oauth-provider.js";
 import { loadDevspaceFiles } from "./user-config.js";
+import { normalizeTeamDomain, type CloudflareAccessConfig } from "./cloudflare-access.js";
 
 export type ToolNamingMode = "legacy" | "short";
 export type ToolMode = "minimal" | "full";
@@ -28,6 +29,7 @@ export interface ServerConfig {
   skillPaths: string[];
   agentDir: string;
   logging: LoggingConfig;
+  cloudflareAccess: CloudflareAccessConfig;
 }
 
 function parsePort(value: string | number | undefined): number {
@@ -156,6 +158,46 @@ function parseLoggingConfig(env: NodeJS.ProcessEnv): LoggingConfig {
   };
 }
 
+function parseCloudflareAccessConfig(
+  env: NodeJS.ProcessEnv,
+  fileValue: {
+    enabled?: boolean;
+    teamDomain?: string;
+    audience?: string[];
+    allowedEmails?: string[];
+  } | undefined,
+): CloudflareAccessConfig {
+  const enabled =
+    env.DEVSPACE_CLOUDFLARE_ACCESS === undefined
+      ? fileValue?.enabled ?? false
+      : parseBoolean(env.DEVSPACE_CLOUDFLARE_ACCESS);
+  const teamDomain = normalizeTeamDomain(
+    env.DEVSPACE_CLOUDFLARE_ACCESS_TEAM_DOMAIN ?? fileValue?.teamDomain ?? "",
+  );
+  const audience = parseStringList(
+    env.DEVSPACE_CLOUDFLARE_ACCESS_AUD,
+    fileValue?.audience ?? [],
+  );
+  const allowedEmails = parseStringList(
+    env.DEVSPACE_CLOUDFLARE_ACCESS_ALLOWED_EMAILS,
+    fileValue?.allowedEmails ?? [],
+  );
+
+  if (enabled && !teamDomain) {
+    throw new Error("DEVSPACE_CLOUDFLARE_ACCESS_TEAM_DOMAIN is required when Cloudflare Access is enabled.");
+  }
+  if (enabled && audience.length === 0) {
+    throw new Error("DEVSPACE_CLOUDFLARE_ACCESS_AUD is required when Cloudflare Access is enabled.");
+  }
+
+  return {
+    enabled,
+    teamDomain: teamDomain || undefined,
+    audience,
+    allowedEmails,
+  };
+}
+
 function parseWidgetMode(value: string | undefined): WidgetMode {
   if (!value || value === "full") return "full";
   if (value === "off" || value === "changes") return value;
@@ -231,7 +273,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     allowedRoots: parseAllowedRoots(env.DEVSPACE_ALLOWED_ROOTS ?? files.config.allowedRoots),
     allowedHosts: parseAllowedHosts(env.DEVSPACE_ALLOWED_HOSTS, derivedAllowedHosts),
     publicBaseUrl,
-    shellEnabled: env.DEVSPACE_SHELL === undefined ? files.config.shellEnabled ?? false : parseBoolean(env.DEVSPACE_SHELL),
+    shellEnabled: env.DEVSPACE_SHELL === undefined ? files.config.shellEnabled ?? true : parseBoolean(env.DEVSPACE_SHELL),
     minimalTools: parseMinimalTools(env, files.config.toolMode),
     toolNaming: parseToolNaming(env.DEVSPACE_TOOL_NAMING ?? files.config.toolNaming),
     widgets: parseWidgetMode(env.DEVSPACE_WIDGETS ?? files.config.widgets),
@@ -241,6 +283,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     skillPaths: parsePathList(env.DEVSPACE_SKILL_PATHS),
     agentDir: resolve(expandHomePath(env.DEVSPACE_AGENT_DIR ?? files.config.agentDir ?? defaultAgentDir())),
     logging: parseLoggingConfig(env),
+    cloudflareAccess: parseCloudflareAccessConfig(env, files.config.cloudflareAccess),
   };
 }
 
