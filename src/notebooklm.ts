@@ -21,6 +21,20 @@ export interface NotebookLmMappedError {
   repairHint: string;
 }
 
+export class NotebookLmClientError extends Error {
+  readonly code: NotebookLmMappedError["code"];
+  readonly repairHint: string;
+  override readonly cause: unknown;
+
+  constructor(mapped: NotebookLmMappedError, cause: unknown) {
+    super(`${mapped.code}: ${mapped.message}`, { cause });
+    this.name = "NotebookLmClientError";
+    this.code = mapped.code;
+    this.repairHint = mapped.repairHint;
+    this.cause = cause;
+  }
+}
+
 export function createNotebookLmEnvironment(config: NotebookLmConfig): Record<string, string> {
   return {
     NOTEBOOKLM_MCP_DATA_DIR: config.dataDir,
@@ -38,6 +52,21 @@ export function mapNotebookLmError(error: unknown): NotebookLmMappedError {
       code: "browser_profile_locked",
       message,
       repairHint: "Close other Chrome/Chromium instances using the NotebookLM profile, then retry.",
+    };
+  }
+  if (
+    lower.includes("expired") ||
+    lower.includes("stale") ||
+    lower.includes("unauthorized") ||
+    lower.includes("401") ||
+    lower.includes("session") ||
+    lower.includes("cookie") ||
+    lower.includes("timeout")
+  ) {
+    return {
+      code: "auth_state_stale",
+      message,
+      repairHint: "Refresh the NotebookLM browser profile by running notebooklm_status or notebooklm_setup_auth.",
     };
   }
   if (lower.includes("login") || lower.includes("auth")) {
@@ -74,7 +103,7 @@ class StdioNotebookLmClient implements NotebookLmClient {
       return await client.callTool({ name, arguments: args }, CallToolResultSchema) as CallToolResult;
     } catch (error) {
       const mapped = mapNotebookLmError(error);
-      throw new Error(`${mapped.code}: ${mapped.message}`);
+      throw new NotebookLmClientError(mapped, error);
     }
   }
 
