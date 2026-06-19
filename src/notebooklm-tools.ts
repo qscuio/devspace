@@ -44,7 +44,7 @@ export function registerNotebookLmTools(
     "notebooklm_status",
     {
       title: "NotebookLM status",
-      description: "Report NotebookLM auth, profile, library, session, and repair status.",
+      description: "Report NotebookLM status.",
       inputSchema: { verify_browser: z.boolean().optional() },
       annotations: { readOnlyHint: true, openWorldHint: true },
     },
@@ -56,7 +56,7 @@ export function registerNotebookLmTools(
     {
       title: "Discover NotebookLM notebooks",
       description:
-        "Scan the signed-in NotebookLM account and import visible notebooks into DevSpace metadata.",
+        "Import visible NotebookLM notebooks.",
       inputSchema: {
         mode: z.enum(["scan", "scan_and_enrich"]).optional(),
         limit: z.number().int().positive().max(200).optional(),
@@ -73,7 +73,7 @@ export function registerNotebookLmTools(
     {
       title: "Manage NotebookLM library",
       description:
-        "List, search, update, tag, alias, remove, or clear sessions for DevSpace NotebookLM metadata.",
+        "Manage NotebookLM metadata.",
       inputSchema: {
         action: z.enum(["list", "search", "update", "remove", "clear_sessions"]).optional(),
         query: z.string().optional(),
@@ -92,7 +92,7 @@ export function registerNotebookLmTools(
     {
       title: "Research with NotebookLM",
       description:
-        "Ask a source-grounded question against a selected NotebookLM notebook or confirmed candidate.",
+        "Ask a selected NotebookLM notebook.",
       inputSchema: {
         question: z.string(),
         notebook: z.string().optional(),
@@ -207,7 +207,7 @@ function registerRawNotebookLmTools(server: McpServer, client: NotebookLmClient)
     {
       title: "NotebookLM health",
       description:
-        "Check NotebookLM MCP health, authentication state, active sessions, and configuration.",
+        "Check NotebookLM health.",
       annotations: { readOnlyHint: true, openWorldHint: true },
     },
     async () => callNotebookLm("get_health"),
@@ -218,7 +218,7 @@ function registerRawNotebookLmTools(server: McpServer, client: NotebookLmClient)
     {
       title: "NotebookLM setup auth",
       description:
-        "Open NotebookLM Google authentication in a browser window and save the browser state. The user enters Google credentials directly.",
+        "Open NotebookLM auth and save browser state.",
       inputSchema: {
         show_browser: z.boolean().optional(),
         browser_options: z.unknown().optional(),
@@ -232,7 +232,7 @@ function registerRawNotebookLmTools(server: McpServer, client: NotebookLmClient)
     "notebooklm_list_notebooks",
     {
       title: "List NotebookLM notebooks",
-      description: "List notebooks saved in the NotebookLM MCP library.",
+      description: "List NotebookLM notebooks.",
       annotations: { readOnlyHint: true, openWorldHint: true },
     },
     async () => callNotebookLm("list_notebooks"),
@@ -243,7 +243,7 @@ function registerRawNotebookLmTools(server: McpServer, client: NotebookLmClient)
     {
       title: "Add NotebookLM notebook",
       description:
-        "Add a NotebookLM notebook share URL to the local NotebookLM MCP library with metadata.",
+        "Add a NotebookLM notebook URL.",
       inputSchema: {
         url: z.string(),
         name: z.string(),
@@ -263,7 +263,7 @@ function registerRawNotebookLmTools(server: McpServer, client: NotebookLmClient)
     {
       title: "Ask NotebookLM",
       description:
-        "Ask a question against a NotebookLM notebook URL, notebook ID, or active notebook. Use for best-effort source-grounded research from user-provided notebooks.",
+        "Ask a NotebookLM notebook.",
       inputSchema: {
         question: z.string(),
         notebook_url: z.string().optional(),

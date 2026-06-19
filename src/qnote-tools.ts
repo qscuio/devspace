@@ -14,7 +14,7 @@ export function registerQnoteTools(server: McpServer, config: ServerConfig): voi
     {
       title: "Sync qnote",
       description:
-        "Clone or fast-forward the private qnote storage repository. Refuses dirty checkouts and non-fast-forward updates.",
+        "Clone or fast-forward qnote.",
       annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
     },
     async () => formatToolResult(await store.sync()),
@@ -24,7 +24,7 @@ export function registerQnoteTools(server: McpServer, config: ServerConfig): voi
     "qnote_search",
     {
       title: "Search qnote",
-      description: "Search Markdown notes stored in the private qnote repository.",
+      description: "Search qnote Markdown.",
       inputSchema: {
         query: z.string(),
         limit: z.number().int().positive().max(100).optional(),
@@ -38,7 +38,7 @@ export function registerQnoteTools(server: McpServer, config: ServerConfig): voi
     "qnote_read",
     {
       title: "Read qnote",
-      description: "Read one Markdown note from qnote by repository-relative path.",
+      description: "Read a qnote file.",
       inputSchema: {
         path: z.string(),
         maxBytes: z.number().int().positive().max(512 * 1024).optional(),
@@ -53,11 +53,11 @@ export function registerQnoteTools(server: McpServer, config: ServerConfig): voi
     {
       title: "Capture qnote",
       description:
-        "Store a summarized knowledge note, lesson, or skill in qnote. Summarize and deduplicate with qnote_search before using this; do not upload raw chat transcripts unless the user explicitly asks.",
+        "Store summarized knowledge, lessons, or skills in qnote.",
       inputSchema: {
-        destination: z.string().describe("Repository-relative Markdown path under an allowed qnote directory."),
+        destination: z.string().describe("Repo-relative Markdown path."),
         title: z.string(),
-        body: z.string().describe("Already summarized Markdown content to store."),
+        body: z.string().describe("Summarized Markdown."),
         tags: z.array(z.string()).optional(),
         sourceId: z.string().optional(),
         sync: z.boolean().optional(),
@@ -73,7 +73,7 @@ export function registerQnoteTools(server: McpServer, config: ServerConfig): voi
     {
       title: "Inspect AI history",
       description:
-        "Scan, page-read, or cursor-iterate host-local Claude, Codex, Cursor, ChatGPT export, and browser history sources before summarizing useful knowledge into qnote_capture. For long sessions, keep calling read with nextOffset or iterate with nextCursor until completeAll is true. Browser history is metadata-only; use ChatGPT official export for full ChatGPT conversation content.",
+        "Scan/read/iterate local AI history. Continue nextOffset/nextCursor until complete.",
       inputSchema: {
         action: z.enum(["scan", "read", "iterate"]).optional(),
         id: z.string().optional(),
