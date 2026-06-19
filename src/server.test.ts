@@ -5,6 +5,7 @@ import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { loadConfig } from "./config.js";
+import { createNotebookLmAuthRefreshManager } from "./notebooklm-auth-refresh.js";
 import { createServer } from "./server.js";
 
 type ViteManifestEntry = {
@@ -20,7 +21,14 @@ const config = loadConfig({
   DEVSPACE_TRUST_PROXY: "1",
 });
 
-const { app } = createServer(config);
+const authRefreshStatePath = join(testRoot, "notebooklm-state", "state.json");
+const authRefreshManager = createNotebookLmAuthRefreshManager({
+  statePath: authRefreshStatePath,
+  tokenTtlMs: 60_000,
+  now: () => new Date("2026-06-20T00:00:00.000Z"),
+});
+
+const { app } = createServer(config, { notebookLmAuthRefreshManager: authRefreshManager });
 assert.equal(app.get("trust proxy"), 1);
 
 const manifest = JSON.parse(
@@ -44,6 +52,26 @@ try {
     legacyAssetResponse.headers.get("access-control-allow-origin") ?? "",
     /\*/,
   );
+
+  const uploadToken = authRefreshManager.createUploadToken();
+  const uploadResponse = await fetch(`${baseUrl}/notebooklm/auth-refresh/upload`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      token: uploadToken.token,
+      state: {
+        cookies: [{ name: "SID", value: "secret", domain: ".google.com", path: "/" }],
+        origins: [{ origin: "https://notebooklm.google.com", localStorage: [] }],
+      },
+    }),
+  });
+  assert.equal(uploadResponse.status, 200);
+  assert.deepEqual(await uploadResponse.json(), {
+    ok: true,
+    cookies: 1,
+    origins: 1,
+  });
+  assert.equal(JSON.parse(readFileSync(authRefreshStatePath, "utf8")).cookies.length, 1);
 } finally {
   await new Promise<void>((resolve, reject) =>
     httpServer.close((error) => {

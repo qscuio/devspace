@@ -159,7 +159,7 @@ function defaultNotebookLmChromeProfileDir(): string {
   return join(homedir(), ".local", "share", "notebooklm-mcp", "chrome_profile");
 }
 
-function defaultNotebookLmBrowserStatePath(): string {
+export function defaultNotebookLmBrowserStatePath(): string {
   if (process.env.DEVSPACE_NOTEBOOKLM_BROWSER_STATE_PATH) {
     return process.env.DEVSPACE_NOTEBOOKLM_BROWSER_STATE_PATH;
   }

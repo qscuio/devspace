@@ -132,6 +132,25 @@ assert.equal(throwingDiscovery.status, "browser_failed");
 assert.match(throwingDiscovery.message, /browser profile unavailable/);
 assert.equal(throwingDiscovery.repairHint, "Ask by notebook URL or configure the discovery adapter.");
 
+const staleAuthDataDir = mkdtempSync(join(tmpdir(), "devspace-notebooklm-workflows-stale-auth-test-"));
+const staleAuthWorkflows = new NotebookLmWorkflows({
+  library: new NotebookLmLibraryStore(staleAuthDataDir),
+  sessions: new NotebookLmSessionStore(staleAuthDataDir, 900),
+  client,
+  dataDir: staleAuthDataDir,
+  discoverer: {
+    async discover() {
+      throw new Error("NotebookLM browser profile is not authenticated.");
+    },
+  },
+});
+const staleAuthDiscovery = await staleAuthWorkflows.discover({});
+assert.equal(staleAuthDiscovery.status, "browser_failed");
+assert.equal(
+  staleAuthDiscovery.repairHint,
+  "Open /notebooklm/auth-refresh on the DevSpace server, upload a fresh NotebookLM browser state from the current PC, then retry discovery.",
+);
+
 const ambiguous = await workflows.research({ question: "How?", notebook: "Broadcom" });
 assert.equal(ambiguous.status, "ambiguous_notebook");
 assert.equal(ambiguous.candidates?.length, 2);

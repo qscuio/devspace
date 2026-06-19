@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { randomUUID, timingSafeEqual } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { access, realpath } from "node:fs/promises";
 import { join } from "node:path";
@@ -46,6 +46,12 @@ import {
   createNotebookLmClient,
   type NotebookLmClientFactory,
 } from "./notebooklm.js";
+import {
+  createNotebookLmAuthRefreshManager,
+  NotebookLmAuthRefreshError,
+  type NotebookLmAuthRefreshManager,
+} from "./notebooklm-auth-refresh.js";
+import { defaultNotebookLmBrowserStatePath } from "./notebooklm-discovery.js";
 import { registerNotebookLmTools } from "./notebooklm-tools.js";
 
 type Transport = StreamableHTTPServerTransport;
@@ -73,6 +79,10 @@ const SHELL_TOOL_ANNOTATIONS = {
 interface RunningServer {
   app: ReturnType<typeof createMcpExpressApp>;
   config: ServerConfig;
+}
+
+interface ServerDependencies {
+  notebookLmAuthRefreshManager?: NotebookLmAuthRefreshManager;
 }
 
 type ToolContent =
@@ -227,6 +237,135 @@ function resultOutputSchema(extra: z.ZodRawShape = {}): z.ZodRawShape {
       ),
     ...extra,
   };
+}
+
+function registerNotebookLmAuthRefreshRoutes(
+  app: ReturnType<typeof createMcpExpressApp>,
+  config: ServerConfig,
+  manager: NotebookLmAuthRefreshManager,
+): void {
+  app.get("/notebooklm/auth-refresh", (_req, res) => {
+    res.type("html").send(notebookLmAuthRefreshForm());
+  });
+
+  app.post(
+    "/notebooklm/auth-refresh",
+    express.urlencoded({ extended: false, limit: "16kb" }),
+    (req, res) => {
+      const ownerToken = typeof req.body?.owner_token === "string" ? req.body.owner_token : "";
+      if (!safeStringEquals(ownerToken, config.oauth.ownerToken)) {
+        res.status(401).type("html").send(notebookLmAuthRefreshForm("Owner password is incorrect."));
+        return;
+      }
+
+      const uploadToken = manager.createUploadToken();
+      res.type("html").send(notebookLmAuthRefreshUploadPage(uploadToken));
+    },
+  );
+
+  app.post(
+    "/notebooklm/auth-refresh/upload",
+    express.json({ limit: "2mb" }),
+    async (req, res) => {
+      try {
+        const body = isRecord(req.body) ? req.body : {};
+        const token = typeof body.token === "string" ? body.token : "";
+        const state = "state" in body ? body.state : undefined;
+        const result = await manager.uploadState({ token, body: state });
+        res.json({
+          ok: true,
+          cookies: result.cookies,
+          origins: result.origins,
+        });
+      } catch (error) {
+        if (error instanceof NotebookLmAuthRefreshError) {
+          res.status(error.status).json({
+            ok: false,
+            code: error.code,
+            message: error.message,
+          });
+          return;
+        }
+        throw error;
+      }
+    },
+  );
+}
+
+function notebookLmAuthRefreshForm(error?: string): string {
+  return `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>NotebookLM Auth Refresh</title>
+  <style>
+    body { font-family: system-ui, sans-serif; max-width: 720px; margin: 48px auto; padding: 0 20px; line-height: 1.5; }
+    label { display: block; font-weight: 600; margin-bottom: 8px; }
+    input { box-sizing: border-box; width: 100%; padding: 10px 12px; font: inherit; }
+    button { margin-top: 14px; padding: 10px 14px; font: inherit; }
+    .error { color: #b00020; }
+    code { word-break: break-all; }
+  </style>
+</head>
+<body>
+  <h1>NotebookLM Auth Refresh</h1>
+  <p>Enter the DevSpace owner password to create a one-time upload token for a fresh NotebookLM browser state.</p>
+  ${error ? `<p class="error">${escapeHtml(error)}</p>` : ""}
+  <form method="post" action="/notebooklm/auth-refresh">
+    <label for="owner_token">Owner password</label>
+    <input id="owner_token" name="owner_token" type="password" autocomplete="current-password" autofocus required>
+    <button type="submit">Create upload token</button>
+  </form>
+</body>
+</html>`;
+}
+
+function notebookLmAuthRefreshUploadPage(uploadToken: {
+  token: string;
+  expiresAt: string;
+}): string {
+  return `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>NotebookLM Upload Token</title>
+  <style>
+    body { font-family: system-ui, sans-serif; max-width: 760px; margin: 48px auto; padding: 0 20px; line-height: 1.5; }
+    code, pre { word-break: break-all; white-space: pre-wrap; }
+    pre { background: #f6f8fa; padding: 14px; border-radius: 6px; }
+  </style>
+</head>
+<body>
+  <h1>NotebookLM Upload Token</h1>
+  <p>This token expires at <code>${escapeHtml(uploadToken.expiresAt)}</code> and can be used once.</p>
+  <pre>${escapeHtml(JSON.stringify({
+    uploadUrl: "/notebooklm/auth-refresh/upload",
+    token: uploadToken.token,
+  }, null, 2))}</pre>
+  <p>Upload JSON as <code>{"token":"...","state":{...storage_state_json...}}</code>.</p>
+</body>
+</html>`;
+}
+
+function safeStringEquals(left: string, right: string): boolean {
+  const leftBuffer = Buffer.from(left);
+  const rightBuffer = Buffer.from(right);
+  if (leftBuffer.length !== rightBuffer.length) return false;
+  return timingSafeEqual(leftBuffer, rightBuffer);
+}
+
+function escapeHtml(value: string): string {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 const workspaceSkillOutputSchema = z.object({
@@ -1477,7 +1616,7 @@ export function createMcpServer(
   return server;
 }
 
-export function createServer(config = loadConfig()): RunningServer {
+export function createServer(config = loadConfig(), deps: ServerDependencies = {}): RunningServer {
   const allowedHosts = config.allowedHosts.includes("*")
     ? undefined
     : Array.from(new Set([config.host, ...config.allowedHosts]));
@@ -1502,6 +1641,9 @@ export function createServer(config = loadConfig()): RunningServer {
   const workspaceStore = createWorkspaceStore(config.stateDir);
   const workspaces = new WorkspaceRegistry(config, workspaceStore);
   const reviewCheckpoints = createReviewCheckpointManager();
+  const notebookLmAuthRefreshManager = deps.notebookLmAuthRefreshManager ?? createNotebookLmAuthRefreshManager({
+    statePath: defaultNotebookLmBrowserStatePath(),
+  });
 
   if (config.logging.trustProxy) {
     app.set("trust proxy", 1);
@@ -1581,6 +1723,8 @@ export function createServer(config = loadConfig()): RunningServer {
   app.get("/healthz", (_req, res) => {
     res.json({ ok: true, name: "devspace" });
   });
+
+  registerNotebookLmAuthRefreshRoutes(app, config, notebookLmAuthRefreshManager);
 
   app.all("/mcp", async (req, res) => {
     const requestId = res.locals.requestId as string | undefined;

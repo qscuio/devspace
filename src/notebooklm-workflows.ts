@@ -502,7 +502,7 @@ function notebookContains(record: NotebookRecord, query: string): boolean {
 function notebookLmDiscoveryRepairHint(message: string): string {
   const lower = message.toLowerCase();
   if (lower.includes("not authenticated") || lower.includes("accounts.google.com")) {
-    return "Upload a fresh NotebookLM browser state from the current PC or authenticate the VPS browser profile, then retry discovery.";
+    return "Open /notebooklm/auth-refresh on the DevSpace server, upload a fresh NotebookLM browser state from the current PC, then retry discovery.";
   }
   return "Ask by notebook URL or configure the discovery adapter.";
 }
