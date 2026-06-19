@@ -1,4 +1,6 @@
 import { timingSafeEqual, randomBytes, randomUUID, createHash } from "node:crypto";
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { dirname } from "node:path";
 import type { Response } from "express";
 import type { OAuthRegisteredClientsStore } from "@modelcontextprotocol/sdk/server/auth/clients.js";
 import type { OAuthServerProvider, AuthorizationParams } from "@modelcontextprotocol/sdk/server/auth/provider.js";
@@ -138,13 +140,44 @@ function redirectHostAllowed(redirectUri: string, allowedHosts: string[]): boole
   return allowedHosts.includes(parsed.hostname);
 }
 
+function isOAuthClientsFile(value: unknown): value is { clients: OAuthClientInformationFull[] } {
+  if (!value || typeof value !== "object") return false;
+  const clients = (value as { clients?: unknown }).clients;
+  return Array.isArray(clients) && clients.every(isOAuthClientInformationFull);
+}
+
+function isOAuthClientInformationFull(value: unknown): value is OAuthClientInformationFull {
+  if (!value || typeof value !== "object") return false;
+  const client = value as {
+    client_id?: unknown;
+    client_id_issued_at?: unknown;
+    redirect_uris?: unknown;
+  };
+  return (
+    typeof client.client_id === "string" &&
+    typeof client.client_id_issued_at === "number" &&
+    Array.isArray(client.redirect_uris) &&
+    client.redirect_uris.every((uri) => typeof uri === "string")
+  );
+}
+
 export class InMemoryOAuthClientsStore implements OAuthRegisteredClientsStore {
   private readonly clients = new Map<string, OAuthClientInformationFull>();
 
-  constructor(private readonly allowedRedirectHosts: string[]) {}
+  constructor(
+    private readonly allowedRedirectHosts: string[],
+    private readonly clientStorePath?: string,
+  ) {
+    this.loadPersistedClients();
+  }
 
   getClient(clientId: string): OAuthClientInformationFull | undefined {
-    return this.clients.get(clientId);
+    const client = this.clients.get(clientId);
+    if (!client) return undefined;
+    if (!client.redirect_uris.every((uri) => redirectHostAllowed(uri, this.allowedRedirectHosts))) {
+      return undefined;
+    }
+    return client;
   }
 
   registerClient(
@@ -164,7 +197,43 @@ export class InMemoryOAuthClientsStore implements OAuthRegisteredClientsStore {
       response_types: client.response_types ?? ["code"],
     };
     this.clients.set(registered.client_id, registered);
+    this.persistClients();
     return registered;
+  }
+
+  private loadPersistedClients(): void {
+    if (!this.clientStorePath || !existsSync(this.clientStorePath)) return;
+
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(readFileSync(this.clientStorePath, "utf8"));
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      throw new Error(`Unable to read OAuth client store ${this.clientStorePath}: ${reason}`);
+    }
+
+    if (!isOAuthClientsFile(parsed)) {
+      throw new Error(`Invalid OAuth client store ${this.clientStorePath}`);
+    }
+
+    for (const client of parsed.clients) {
+      if (client.redirect_uris.every((uri) => redirectHostAllowed(uri, this.allowedRedirectHosts))) {
+        this.clients.set(client.client_id, client);
+      }
+    }
+  }
+
+  private persistClients(): void {
+    if (!this.clientStorePath) return;
+
+    mkdirSync(dirname(this.clientStorePath), { recursive: true });
+    const tempPath = `${this.clientStorePath}.${process.pid}.${randomUUID()}.tmp`;
+    writeFileSync(
+      tempPath,
+      JSON.stringify({ clients: Array.from(this.clients.values()) }, null, 2) + "\n",
+      { mode: 0o600 },
+    );
+    renameSync(tempPath, this.clientStorePath);
   }
 }
 
@@ -178,9 +247,10 @@ export class SingleUserOAuthProvider implements OAuthServerProvider {
   constructor(
     private readonly config: OAuthConfig,
     resourceServerUrl: URL,
+    clientStorePath?: string,
   ) {
     this.resourceServerUrl = resourceUrlFromServerUrl(resourceServerUrl);
-    this.clientsStore = new InMemoryOAuthClientsStore(config.allowedRedirectHosts);
+    this.clientsStore = new InMemoryOAuthClientsStore(config.allowedRedirectHosts, clientStorePath);
   }
 
   async authorize(
