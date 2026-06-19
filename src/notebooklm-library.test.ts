@@ -68,3 +68,26 @@ assert.equal(ambiguous.status, "ambiguous");
 assert.equal(ambiguous.candidates.length, 2);
 
 assert.equal((await store.resolve({ notebook: "missing" })).status, "not_found");
+
+const concurrentDataDir = mkdtempSync(
+  join(tmpdir(), "devspace-notebooklm-library-concurrent-test-"),
+);
+const concurrentStore = new NotebookLmLibraryStore(concurrentDataDir);
+await Promise.all([
+  concurrentStore.upsert({
+    url: "https://notebooklm.google.com/notebook/concurrent-a",
+    name: "Concurrent A",
+    source: "manual",
+  }),
+  concurrentStore.upsert({
+    url: "https://notebooklm.google.com/notebook/concurrent-b",
+    name: "Concurrent B",
+    source: "manual",
+  }),
+]);
+const concurrentRecords = await concurrentStore.list();
+assert.equal(concurrentRecords.length, 2);
+assert.deepEqual(
+  concurrentRecords.map((record) => record.id).sort(),
+  ["concurrent-a", "concurrent-b"],
+);

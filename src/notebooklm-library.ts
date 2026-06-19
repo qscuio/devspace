@@ -66,6 +66,7 @@ function scoreNotebook(record: NotebookRecord, query: string): number {
 
 export class NotebookLmLibraryStore {
   private readonly filePath: string;
+  private writeQueue: Promise<void> = Promise.resolve();
 
   constructor(private readonly dataDir: string) {
     this.filePath = join(dataDir, "library.json");
@@ -81,27 +82,27 @@ export class NotebookLmLibraryStore {
   }
 
   async upsert(input: NotebookUpsertInput): Promise<NotebookRecord> {
-    const records = await this.list();
-    const url = normalizeNotebookUrl(input.url);
-    const id = notebookIdFromUrl(url);
-    const existing = records.find((record) => record.id === id || record.url === url);
-    const merged: NotebookRecord = {
-      id,
-      url,
-      name: input.name,
-      aliases: uniqueSorted([...(existing?.aliases ?? []), ...(input.aliases ?? [])]),
-      description: input.description ?? existing?.description ?? "",
-      topics: uniqueSorted([...(existing?.topics ?? []), ...(input.topics ?? [])]),
-      tags: uniqueSorted([...(existing?.tags ?? []), ...(input.tags ?? [])]),
-      source: input.source,
-      lastDiscoveredAt: input.discoveredAt ?? existing?.lastDiscoveredAt,
-      lastEnrichedAt: input.enrichedAt ?? existing?.lastEnrichedAt,
-    };
-    const next = existing
-      ? records.map((record) => (record.id === existing.id ? merged : record))
-      : [...records, merged];
-    await this.save(next);
-    return merged;
+    return this.updateRecords((records) => {
+      const url = normalizeNotebookUrl(input.url);
+      const id = notebookIdFromUrl(url);
+      const existing = records.find((record) => record.id === id || record.url === url);
+      const merged: NotebookRecord = {
+        id,
+        url,
+        name: input.name,
+        aliases: uniqueSorted([...(existing?.aliases ?? []), ...(input.aliases ?? [])]),
+        description: input.description ?? existing?.description ?? "",
+        topics: uniqueSorted([...(existing?.topics ?? []), ...(input.topics ?? [])]),
+        tags: uniqueSorted([...(existing?.tags ?? []), ...(input.tags ?? [])]),
+        source: input.source,
+        lastDiscoveredAt: input.discoveredAt ?? existing?.lastDiscoveredAt,
+        lastEnrichedAt: input.enrichedAt ?? existing?.lastEnrichedAt,
+      };
+      const next = existing
+        ? records.map((record) => (record.id === existing.id ? merged : record))
+        : [...records, merged];
+      return { records: next, result: merged };
+    });
   }
 
   async resolve(selector: {
@@ -127,5 +128,23 @@ export class NotebookLmLibraryStore {
   private async save(records: NotebookRecord[]): Promise<void> {
     await mkdir(this.dataDir, { recursive: true });
     await writeFile(this.filePath, `${JSON.stringify(records, null, 2)}\n`, "utf8");
+  }
+
+  private async updateRecords<T>(
+    fn: (records: NotebookRecord[]) => { records: NotebookRecord[]; result: T },
+  ): Promise<T> {
+    const previous = this.writeQueue;
+    let release!: () => void;
+    this.writeQueue = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    await previous;
+    try {
+      const update = fn(await this.list());
+      await this.save(update.records);
+      return update.result;
+    } finally {
+      release();
+    }
   }
 }
