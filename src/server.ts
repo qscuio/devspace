@@ -441,6 +441,10 @@ function uiBuildDirectory(): string {
   return fileURLToPath(new URL("../dist/ui", import.meta.url));
 }
 
+function uiAssetsDirectory(): string {
+  return fileURLToPath(new URL("../dist/ui/assets", import.meta.url));
+}
+
 function setAssetHeaders(res: Response): void {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "GET, HEAD, OPTIONS");
@@ -1313,7 +1317,12 @@ export function createServer(config = loadConfig()): RunningServer {
     res.on("finish", () => {
       const path = requestPath(req);
       if (!config.logging.requests) return;
-      if (!config.logging.assets && path.startsWith("/mcp-app-assets")) return;
+      if (
+        !config.logging.assets &&
+        (path.startsWith("/mcp-app-assets") || path.startsWith("/assets"))
+      ) {
+        return;
+      }
 
       logEvent(config.logging, "info", "http_request", {
         requestId,
@@ -1347,6 +1356,21 @@ export function createServer(config = loadConfig()): RunningServer {
   app.use(
     "/mcp-app-assets",
     express.static(uiBuildDirectory(), {
+      immutable: true,
+      maxAge: "1y",
+      fallthrough: false,
+      setHeaders: setAssetHeaders,
+    }),
+  );
+
+  app.options("/assets/{*asset}", (_req, res) => {
+    setAssetHeaders(res);
+    res.sendStatus(204);
+  });
+
+  app.use(
+    "/assets",
+    express.static(uiAssetsDirectory(), {
       immutable: true,
       maxAge: "1y",
       fallthrough: false,
