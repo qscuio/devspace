@@ -15,8 +15,11 @@ const baseEnv = {
   DEVSPACE_OAUTH_OWNER_TOKEN: "test-owner-token-that-is-long-enough",
 };
 
-function createTestClient(fakeNotebooklm: NotebookLmClient) {
-  const config = loadConfig(baseEnv);
+function createTestClient(
+  fakeNotebooklm: NotebookLmClient,
+  env: Record<string, string> = {},
+) {
+  const config = loadConfig({ ...baseEnv, ...env });
   const workspaces = new WorkspaceRegistry(config, createWorkspaceStore(config.stateDir));
   const server = createMcpServer(
     config,
@@ -34,6 +37,21 @@ const calls: Array<{ name: string; arguments?: Record<string, unknown> }> = [];
 const fakeNotebooklm: NotebookLmClient = {
   async callTool(name, args) {
     calls.push({ name, arguments: args });
+    if (name === "get_health") {
+      return {
+        content: [{ type: "text", text: "healthy" }],
+        structuredContent: { status: "ok", authenticated: true },
+      };
+    }
+    if (name === "ask_question") {
+      return {
+        content: [{ type: "text", text: "This notebook contains example content." }],
+        structuredContent: {
+          session_id: "session-1",
+          answer: "This notebook contains example content.",
+        },
+      };
+    }
     return {
       content: [{ type: "text", text: `called ${name}` }],
       structuredContent: { ok: true, name },
@@ -49,19 +67,21 @@ const fakeNotebooklm: NotebookLmClient = {
   try {
     const tools = await client.listTools();
     const toolNames = tools.tools.map((tool) => tool.name);
-    assert.ok(toolNames.includes("notebooklm_get_health"));
-    assert.ok(toolNames.includes("notebooklm_ask_question"));
-    assert.ok(toolNames.includes("notebooklm_list_notebooks"));
+    assert.ok(toolNames.includes("notebooklm_status"));
+    assert.ok(toolNames.includes("notebooklm_discover"));
+    assert.ok(toolNames.includes("notebooklm_library"));
+    assert.ok(toolNames.includes("notebooklm_research"));
+    assert.ok(!toolNames.includes("notebooklm_get_health"));
+    assert.ok(!toolNames.includes("notebooklm_ask_question"));
 
     const result = await client.callTool({
-      name: "notebooklm_ask_question",
+      name: "notebooklm_research",
       arguments: {
         question: "What is in this notebook?",
         notebook_url: "https://notebooklm.google.com/notebook/example",
       },
     }) as CallToolResult;
     assert.equal(result.content[0]?.type, "text");
-    assert.equal(result.content[0]?.text, "called ask_question");
     assert.deepEqual(calls.at(-1), {
       name: "ask_question",
       arguments: {
@@ -69,6 +89,27 @@ const fakeNotebooklm: NotebookLmClient = {
         notebook_url: "https://notebooklm.google.com/notebook/example",
       },
     });
+  } finally {
+    await client.close();
+    await server.close();
+  }
+}
+
+{
+  const { client, server, clientTransport, serverTransport } = createTestClient(
+    fakeNotebooklm,
+    { DEVSPACE_NOTEBOOKLM_RAW_TOOLS: "1" },
+  );
+  await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+
+  try {
+    const tools = await client.listTools();
+    const toolNames = tools.tools.map((tool) => tool.name);
+    assert.ok(toolNames.includes("notebooklm_status"));
+    assert.ok(toolNames.includes("notebooklm_research"));
+    assert.ok(toolNames.includes("notebooklm_get_health"));
+    assert.ok(toolNames.includes("notebooklm_ask_question"));
+    assert.ok(toolNames.includes("notebooklm_list_notebooks"));
   } finally {
     await client.close();
     await server.close();
@@ -91,6 +132,8 @@ const fakeNotebooklm: NotebookLmClient = {
   try {
     const tools = await client.listTools();
     const toolNames = tools.tools.map((tool) => tool.name);
+    assert.ok(!toolNames.includes("notebooklm_status"));
+    assert.ok(!toolNames.includes("notebooklm_research"));
     assert.ok(!toolNames.includes("notebooklm_get_health"));
     assert.ok(!toolNames.includes("notebooklm_ask_question"));
   } finally {

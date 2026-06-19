@@ -43,9 +43,9 @@ import { createWorkspaceStore } from "./workspace-store.js";
 import { formatAgentsPath, WorkspaceRegistry } from "./workspaces.js";
 import {
   createNotebookLmClient,
-  type NotebookLmClient,
   type NotebookLmClientFactory,
 } from "./notebooklm.js";
+import { registerNotebookLmTools } from "./notebooklm-tools.js";
 
 type Transport = StreamableHTTPServerTransport;
 const WORKSPACE_APP_URI = "ui://devspace/workspace-app.html";
@@ -469,97 +469,6 @@ async function assertWorkspaceAppAssets(): Promise<void> {
   for (const candidate of candidates) {
     await access(candidate);
   }
-}
-
-function registerNotebookLmTools(
-  server: McpServer,
-  config: ServerConfig,
-  notebookLmClientFactory: NotebookLmClientFactory,
-): void {
-  if (!config.notebooklm.enabled) return;
-
-  let notebooklmClient: NotebookLmClient | undefined;
-  const client = () => {
-    notebooklmClient ??= notebookLmClientFactory();
-    return notebooklmClient;
-  };
-  const callNotebookLm = (name: string, args?: Record<string, unknown>) =>
-    client().callTool(name, args);
-
-  server.registerTool(
-    "notebooklm_get_health",
-    {
-      title: "NotebookLM health",
-      description:
-        "Check NotebookLM MCP health, authentication state, active sessions, and configuration.",
-      annotations: { readOnlyHint: true, openWorldHint: true },
-    },
-    async () => callNotebookLm("get_health"),
-  );
-
-  server.registerTool(
-    "notebooklm_setup_auth",
-    {
-      title: "NotebookLM setup auth",
-      description:
-        "Open NotebookLM Google authentication in a browser window and save the browser state. The user enters Google credentials directly.",
-      inputSchema: {
-        show_browser: z.boolean().optional(),
-        browser_options: z.unknown().optional(),
-      },
-      annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
-    },
-    async (args) => callNotebookLm("setup_auth", args),
-  );
-
-  server.registerTool(
-    "notebooklm_list_notebooks",
-    {
-      title: "List NotebookLM notebooks",
-      description: "List notebooks saved in the NotebookLM MCP library.",
-      annotations: { readOnlyHint: true, openWorldHint: true },
-    },
-    async () => callNotebookLm("list_notebooks"),
-  );
-
-  server.registerTool(
-    "notebooklm_add_notebook",
-    {
-      title: "Add NotebookLM notebook",
-      description:
-        "Add a NotebookLM notebook share URL to the local NotebookLM MCP library with metadata.",
-      inputSchema: {
-        url: z.string(),
-        name: z.string(),
-        description: z.string(),
-        topics: z.array(z.string()),
-        tags: z.array(z.string()).optional(),
-        use_cases: z.array(z.string()).optional(),
-        content_types: z.array(z.string()).optional(),
-      },
-      annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
-    },
-    async (args) => callNotebookLm("add_notebook", args),
-  );
-
-  server.registerTool(
-    "notebooklm_ask_question",
-    {
-      title: "Ask NotebookLM",
-      description:
-        "Ask a question against a NotebookLM notebook URL, notebook ID, or active notebook. Use for best-effort source-grounded research from user-provided notebooks.",
-      inputSchema: {
-        question: z.string(),
-        notebook_url: z.string().optional(),
-        notebook_id: z.string().optional(),
-        session_id: z.string().optional(),
-        show_browser: z.boolean().optional(),
-        browser_options: z.unknown().optional(),
-      },
-      annotations: { readOnlyHint: true, openWorldHint: true },
-    },
-    async (args) => callNotebookLm("ask_question", args),
-  );
 }
 
 export function createMcpServer(
