@@ -10,6 +10,57 @@ export interface NotebookLmClient {
 
 export type NotebookLmClientFactory = () => NotebookLmClient;
 
+export interface NotebookLmMappedError {
+  code:
+    | "not_authenticated"
+    | "auth_state_stale"
+    | "browser_profile_locked"
+    | "browser_failed"
+    | "upstream_unavailable";
+  message: string;
+  repairHint: string;
+}
+
+export function createNotebookLmEnvironment(config: NotebookLmConfig): Record<string, string> {
+  return {
+    NOTEBOOKLM_MCP_DATA_DIR: config.dataDir,
+    NOTEBOOK_PROFILE_STRATEGY: "single",
+    NOTEBOOK_CLEANUP_ON_STARTUP: "false",
+    NOTEBOOK_CLEANUP_ON_SHUTDOWN: "true",
+  };
+}
+
+export function mapNotebookLmError(error: unknown): NotebookLmMappedError {
+  const message = error instanceof Error ? error.message : String(error);
+  const lower = message.toLowerCase();
+  if (lower.includes("profile") && lower.includes("use")) {
+    return {
+      code: "browser_profile_locked",
+      message,
+      repairHint: "Close other Chrome/Chromium instances using the NotebookLM profile, then retry.",
+    };
+  }
+  if (lower.includes("login") || lower.includes("auth")) {
+    return {
+      code: "not_authenticated",
+      message,
+      repairHint: "Run notebooklm_status or notebooklm_setup_auth with a visible browser.",
+    };
+  }
+  if (lower.includes("browser") || lower.includes("page") || lower.includes("context")) {
+    return {
+      code: "browser_failed",
+      message,
+      repairHint: "Retry with visible browser or refresh the NotebookLM browser profile.",
+    };
+  }
+  return {
+    code: "upstream_unavailable",
+    message,
+    repairHint: "Check that notebooklm-mcp can start and that Node/npm are available.",
+  };
+}
+
 class StdioNotebookLmClient implements NotebookLmClient {
   private client?: Client;
   private transport?: StdioClientTransport;
@@ -18,8 +69,13 @@ class StdioNotebookLmClient implements NotebookLmClient {
   constructor(private readonly config: NotebookLmConfig) {}
 
   async callTool(name: string, args?: Record<string, unknown>): Promise<CallToolResult> {
-    const client = await this.ensureClient();
-    return await client.callTool({ name, arguments: args }, CallToolResultSchema) as CallToolResult;
+    try {
+      const client = await this.ensureClient();
+      return await client.callTool({ name, arguments: args }, CallToolResultSchema) as CallToolResult;
+    } catch (error) {
+      const mapped = mapNotebookLmError(error);
+      throw new Error(`${mapped.code}: ${mapped.message}`);
+    }
   }
 
   async close(): Promise<void> {
@@ -53,6 +109,10 @@ class StdioNotebookLmClient implements NotebookLmClient {
     const transport = new StdioClientTransport({
       command: this.config.command,
       args: this.config.args,
+      env: {
+        ...process.env,
+        ...createNotebookLmEnvironment(this.config),
+      } as Record<string, string>,
       stderr: "pipe",
     });
     await client.connect(transport);
