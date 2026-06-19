@@ -1,4 +1,7 @@
 import assert from "node:assert/strict";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
@@ -9,8 +12,10 @@ import { WorkspaceRegistry } from "./workspaces.js";
 import { createWorkspaceStore } from "./workspace-store.js";
 import type { NotebookLmClient } from "./notebooklm.js";
 
+const testRoot = mkdtempSync(join(tmpdir(), "devspace-notebooklm-tools-test-"));
 const baseEnv = {
-  DEVSPACE_CONFIG_DIR: "C:\\tmp\\devspace-notebooklm-tools-test-config",
+  DEVSPACE_CONFIG_DIR: join(testRoot, "config"),
+  DEVSPACE_NOTEBOOKLM_DATA_DIR: join(testRoot, "notebooklm"),
   DEVSPACE_ALLOWED_ROOTS: process.cwd(),
   DEVSPACE_OAUTH_OWNER_TOKEN: "test-owner-token-that-is-long-enough",
 };
@@ -88,6 +93,19 @@ const fakeNotebooklm: NotebookLmClient = {
         question: "What is in this notebook?",
         notebook_url: "https://notebooklm.google.com/notebook/example",
       },
+    });
+
+    const clearResult = await client.callTool({
+      name: "notebooklm_library",
+      arguments: {
+        action: "clear_sessions",
+        id: "example",
+      },
+    }) as CallToolResult;
+    assert.deepEqual(clearResult.structuredContent, {
+      status: "ok",
+      action: "clear_sessions",
+      cleared: 1,
     });
   } finally {
     await client.close();

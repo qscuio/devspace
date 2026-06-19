@@ -14,6 +14,7 @@ import type { NotebookLmClient, NotebookLmClientFactory } from "./notebooklm.js"
 
 type NotebookLmLibraryToolInput = Omit<NotebookLmLibraryInput, "action"> & {
   action?: NotebookLmLibraryInput["action"] | "update" | "remove";
+  id?: string;
   aliases?: string[];
   tags?: string[];
 };
@@ -114,7 +115,11 @@ async function runLibraryWorkflow(
     };
   }
 
-  return workflows.library(input as NotebookLmLibraryInput);
+  const { id, ...workflowInput } = input;
+  return workflows.library({
+    ...workflowInput,
+    notebookId: workflowInput.notebookId ?? workflowInput.notebook_id ?? id,
+  } as NotebookLmLibraryInput);
 }
 
 function formatToolResult(value: unknown) {
