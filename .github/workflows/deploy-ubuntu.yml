@@ -1,0 +1,81 @@
+name: Deploy Ubuntu
+
+on:
+  push:
+    branches:
+      - codex/private-hardening
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-ubuntu
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    name: Deploy service
+    runs-on: ubuntu-latest
+    env:
+      DEPLOY_BRANCH: ${{ github.ref_name }}
+      DEVSPACE_SERVICE: ${{ vars.DEVSPACE_SERVICE }}
+      UBUNTU_HOST: ${{ secrets.UBUNTU_HOST }}
+      UBUNTU_PORT: ${{ vars.UBUNTU_PORT }}
+      UBUNTU_REPO_PATH: ${{ vars.UBUNTU_REPO_PATH }}
+      UBUNTU_USER: ${{ secrets.UBUNTU_USER }}
+
+    steps:
+      - name: Configure SSH
+        shell: bash
+        env:
+          UBUNTU_SSH_PRIVATE_KEY: ${{ secrets.UBUNTU_SSH_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -z "${UBUNTU_HOST}" ]; then
+            echo "Missing required GitHub secret: UBUNTU_HOST" >&2
+            exit 1
+          fi
+          if [ -z "${UBUNTU_USER}" ]; then
+            echo "Missing required GitHub secret: UBUNTU_USER" >&2
+            exit 1
+          fi
+          if [ -z "${UBUNTU_PORT}" ]; then
+            echo "Missing required GitHub variable: UBUNTU_PORT" >&2
+            exit 1
+          fi
+          if [ -z "${UBUNTU_REPO_PATH}" ]; then
+            echo "Missing required GitHub variable: UBUNTU_REPO_PATH" >&2
+            exit 1
+          fi
+          if [ -z "${DEVSPACE_SERVICE}" ]; then
+            echo "Missing required GitHub variable: DEVSPACE_SERVICE" >&2
+            exit 1
+          fi
+          if [ -z "${UBUNTU_SSH_PRIVATE_KEY}" ]; then
+            echo "Missing required GitHub secret: UBUNTU_SSH_PRIVATE_KEY" >&2
+            exit 1
+          fi
+
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "${UBUNTU_SSH_PRIVATE_KEY}" > ~/.ssh/devspace_ubuntu
+          chmod 600 ~/.ssh/devspace_ubuntu
+          ssh-keyscan -p "${UBUNTU_PORT}" -H "${UBUNTU_HOST}" >> ~/.ssh/known_hosts
+
+      - name: Deploy service
+        shell: bash
+        run: |
+          set -euo pipefail
+          ssh -i ~/.ssh/devspace_ubuntu -p "${UBUNTU_PORT}" \
+            "${UBUNTU_USER}@${UBUNTU_HOST}" \
+            "DEPLOY_BRANCH='${DEPLOY_BRANCH}' DEVSPACE_SERVICE='${DEVSPACE_SERVICE}' UBUNTU_REPO_PATH='${UBUNTU_REPO_PATH}' bash -s" <<'DEPLOY'
+          set -euo pipefail
+          cd "${UBUNTU_REPO_PATH}"
+          git fetch origin "${DEPLOY_BRANCH}"
+          git checkout "${DEPLOY_BRANCH}"
+          git pull --ff-only origin "${DEPLOY_BRANCH}"
+          npm ci
+          npm run build
+          sudo systemctl restart "${DEVSPACE_SERVICE}"
+          systemctl is-active "${DEVSPACE_SERVICE}"
+          DEPLOY
