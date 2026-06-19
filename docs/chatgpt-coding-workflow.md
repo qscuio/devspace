@@ -121,13 +121,14 @@ Use `DEVSPACE_TOOL_MODE=full` to restore dedicated search and directory tools.
 
 ## Show Changes
 
-By default, `DEVSPACE_WIDGETS=full`.
+By default, `DEVSPACE_WIDGETS=changes`.
 
-In that mode, DevSpace attaches widget UI to the exposed workspace, file, edit,
-and shell tools. The aggregate `show_changes` tool is not exposed by default.
+In that mode, DevSpace exposes the aggregate `show_changes` tool and attaches
+widget UI only to `open_workspace` and `show_changes`. Frequent read, search,
+and shell calls use native text results instead of starting a new Apps iframe.
 
-Use `DEVSPACE_WIDGETS=off` to disable widget UI, or `DEVSPACE_WIDGETS=changes`
-to expose the aggregate show-changes flow.
+Use `DEVSPACE_WIDGETS=full` to attach widget UI to every exposed coding tool, or
+`DEVSPACE_WIDGETS=off` to disable widget UI.
 
 ## Shell Use
 

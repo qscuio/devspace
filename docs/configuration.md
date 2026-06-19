@@ -109,8 +109,8 @@ reach the origin.
 
 | Value | Behavior |
 | --- | --- |
-| `full` | Default. Widget UI is attached to exposed workspace, file, edit, and shell tools. |
-| `changes` | Enables the aggregate `show_changes` tool and attaches widget UI to `open_workspace` and `show_changes`. |
+| `changes` | Default. Enables the aggregate `show_changes` tool and attaches widget UI only to `open_workspace` and `show_changes`, avoiding iframe startup for frequent read, search, and shell calls. |
+| `full` | Widget UI is attached to exposed workspace, file, edit, and shell tools. |
 | `off` | Disables widget UI. |
 
 ## Skills
@@ -199,7 +199,7 @@ DEVSPACE_PUBLIC_BASE_URL="https://devspace.example.com" \
 DEVSPACE_WORKTREE_ROOT="$HOME/.devspace/worktrees" \
 DEVSPACE_TOOL_MODE="minimal" \
 DEVSPACE_TOOL_NAMING="short" \
-DEVSPACE_WIDGETS="full" \
+DEVSPACE_WIDGETS="changes" \
 npx @waishnav/devspace serve
 ```
 

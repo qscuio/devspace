@@ -39,6 +39,7 @@ import {
 import { SingleUserOAuthProvider } from "./oauth-provider.js";
 import { createReviewCheckpointManager } from "./review-checkpoints.js";
 import { formatPathForPrompt } from "./skills.js";
+import { sendToolProgress } from "./tool-progress.js";
 import { createWorkspaceStore } from "./workspace-store.js";
 import { formatAgentsPath, WorkspaceRegistry } from "./workspaces.js";
 import {
@@ -388,8 +389,14 @@ function uiManifestUrl(): URL {
   return new URL("../dist/ui/.vite/manifest.json", import.meta.url);
 }
 
+let workspaceAppManifestCache: WorkspaceAppManifest | null = null;
+let workspaceAppAssetsVerified = false;
+
 function readWorkspaceAppManifest(): WorkspaceAppManifest {
-  return JSON.parse(readFileSync(uiManifestUrl(), "utf8")) as WorkspaceAppManifest;
+  workspaceAppManifestCache ??= JSON.parse(
+    readFileSync(uiManifestUrl(), "utf8"),
+  ) as WorkspaceAppManifest;
+  return workspaceAppManifestCache;
 }
 
 function getWorkspaceAppManifestEntry(): WorkspaceAppManifestEntry {
@@ -407,13 +414,40 @@ function assetUrl(baseUrl: string, assetPath: string): string {
   return `${baseUrl}/${assetPath.replace(/^\/+/, "")}`;
 }
 
-function workspaceAppHtml(config: ServerConfig): string {
+function criticalShellStyles(): string {
+  return `:root{color-scheme:light dark;font-family:ui-sans-serif,system-ui,sans-serif;background:transparent;color:#f5f5f6}*{box-sizing:border-box}html,body{margin:0;background:transparent;overflow:hidden}.shell{width:100%;padding:0;overflow:hidden}.critical-card{width:100%;min-height:86px;border:1px solid color-mix(in srgb,#3a3a40 86%,transparent);border-radius:8px;background:color-mix(in srgb,#28282d 92%,transparent);color:#f5f5f6}.critical-header{display:grid;grid-template-columns:38px minmax(0,1fr) auto;align-items:center;gap:12px;min-height:64px;padding:10px 14px}.critical-icon{display:grid;width:38px;height:38px;place-items:center;border:1px solid color-mix(in srgb,#3a3a40 55%,transparent);border-radius:8px;background:linear-gradient(180deg,color-mix(in srgb,#3a3a42 72%,transparent),color-mix(in srgb,#17181c 90%,transparent));color:#f5f5f6}.critical-icon svg{width:19px;height:19px}.critical-main{display:grid;min-width:0;gap:3px}.critical-title{font-size:13px;font-weight:600}.critical-label{overflow:hidden;color:#d6d6dc;font-family:ui-monospace,SFMono-Regular,monospace;font-size:13px;text-overflow:ellipsis;white-space:nowrap}.critical-badge{display:inline-flex;align-items:center;min-height:24px;padding:0 9px;border:1px solid color-mix(in srgb,#3a3a40 80%,transparent);border-radius:999px;background:color-mix(in srgb,#17181c 42%,transparent);color:#d6d6dc;font-family:ui-monospace,SFMono-Regular,monospace;font-size:12px}.critical-body{display:grid;gap:10px;padding:0 14px 14px}.critical-line{color:#b7b7bf;font-size:13px}.critical-progress-bar{position:relative;overflow:hidden;height:4px;border-radius:999px;background:color-mix(in srgb,#3a3a40 64%,transparent)}.critical-progress-bar span{position:absolute;top:0;bottom:0;left:-35%;width:35%;border-radius:inherit;background:color-mix(in srgb,#f5f5f6 72%,transparent);animation:critical-progress-slide 1.35s ease-in-out infinite}@keyframes critical-progress-slide{0%{transform:translateX(0)}100%{transform:translateX(385%)}}@media (prefers-color-scheme:light){:root{color:#17181c}.critical-card{border-color:#d6d6dc;background:#fff;color:#17181c}.critical-icon{background:#f7f7f8;color:#17181c}.critical-label,.critical-badge{color:#4b4b55}.critical-line{color:#5d5d66}.critical-progress-bar{background:#e5e5e8}.critical-progress-bar span{background:#6f6f78}}`;
+}
+
+function criticalShellMarkup(): string {
+  return `<section class="critical-card" data-critical-shell>
+        <div class="critical-header">
+          <span class="critical-icon" aria-hidden="true">
+            <svg fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8"><circle cx="12" cy="12" r="8" /><path d="M12 8v5l3 2" /></svg>
+          </span>
+          <span class="critical-main">
+            <span class="critical-title">Starting DevSpace tool</span>
+            <span class="critical-label">Loading tool progress...</span>
+          </span>
+          <span class="critical-badge">starting</span>
+        </div>
+        <div class="critical-body">
+          <div class="critical-line">Preparing the tool card...</div>
+          <div class="critical-progress-bar" aria-hidden="true"><span></span></div>
+        </div>
+      </section>`;
+}
+
+export function workspaceAppHtml(config: ServerConfig): string {
   const baseUrl = assetBaseUrl(config);
   const entry = getWorkspaceAppManifestEntry();
+  const scriptUrl = assetUrl(baseUrl, entry.file);
   const stylesheets = (entry.css ?? [])
     .map(
       (stylesheet) =>
-        `    <link rel="stylesheet" crossorigin href="${assetUrl(baseUrl, stylesheet)}" />`,
+        [
+          `    <link rel="preload" as="style" crossorigin href="${assetUrl(baseUrl, stylesheet)}" />`,
+          `    <link rel="stylesheet" crossorigin href="${assetUrl(baseUrl, stylesheet)}" />`,
+        ].join("\n"),
     )
     .join("\n");
 
@@ -423,12 +457,14 @@ function workspaceAppHtml(config: ServerConfig): string {
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>DevSpace Workspace</title>
-    <script type="module" crossorigin src="${assetUrl(baseUrl, entry.file)}"></script>
+    <style id="devspace-critical-shell">${criticalShellStyles()}</style>
+    <link rel="modulepreload" crossorigin href="${scriptUrl}" />
 ${stylesheets}
+    <script type="module" crossorigin src="${scriptUrl}"></script>
   </head>
   <body>
     <main id="app" class="shell">
-      <section class="empty">Waiting for a tool result.</section>
+      ${criticalShellMarkup()}
     </main>
   </body>
 </html>`;
@@ -461,6 +497,7 @@ function setAssetHeaders(res: Response): void {
 }
 
 async function assertWorkspaceAppAssets(): Promise<void> {
+  if (workspaceAppAssetsVerified) return;
   const entry = getWorkspaceAppManifestEntry();
   const candidates = [entry.file, ...(entry.css ?? [])].map(
     (assetPath) => new URL(`../dist/ui/${assetPath}`, import.meta.url),
@@ -469,6 +506,7 @@ async function assertWorkspaceAppAssets(): Promise<void> {
   for (const candidate of candidates) {
     await access(candidate);
   }
+  workspaceAppAssetsVerified = true;
 }
 
 export function createMcpServer(
@@ -572,15 +610,30 @@ export function createMcpServer(
       ...toolWidgetDescriptorMeta(config, "workspace"),
       annotations: { readOnlyHint: true },
     },
-    async ({ path, mode, baseRef }) => {
+    async ({ path, mode, baseRef }, extra) => {
       const startedAt = performance.now();
+      await sendToolProgress(extra, {
+        progress: 1,
+        total: 4,
+        message: "Opening workspace",
+      });
       const { workspace, agentsFiles, availableAgentsFiles } = await workspaces.openWorkspace({ path, mode, baseRef });
       if (config.widgets === "changes") {
+        await sendToolProgress(extra, {
+          progress: 2,
+          total: 4,
+          message: "Preparing review checkpoint",
+        });
         void reviewCheckpoints.initializeWorkspace({
           workspaceId: workspace.id,
           root: workspace.root,
         });
       }
+      await sendToolProgress(extra, {
+        progress: 3,
+        total: 4,
+        message: "Loading workspace instructions",
+      });
       const visibleSkills = workspace.skills
         .filter((skill) => !skill.disableModelInvocation)
         .map((skill) => ({
@@ -624,6 +677,11 @@ export function createMcpServer(
         path: workspace.root,
         success: true,
         durationMs: Math.round(performance.now() - startedAt),
+      });
+      await sendToolProgress(extra, {
+        progress: 4,
+        total: 4,
+        message: "Workspace opened",
       });
 
       return {
@@ -701,8 +759,13 @@ export function createMcpServer(
       ...toolWidgetDescriptorMeta(config, "read"),
       annotations: { readOnlyHint: true },
     },
-    async ({ workspaceId, ...input }) => {
+    async ({ workspaceId, ...input }, extra) => {
       const startedAt = performance.now();
+      await sendToolProgress(extra, {
+        progress: 1,
+        total: 2,
+        message: `Reading ${input.path}`,
+      });
       const workspace = workspaces.getWorkspace(workspaceId);
       const readPath = workspaces.resolveReadPath(workspace, input.path);
       const response = await readFileTool(
@@ -715,6 +778,11 @@ export function createMcpServer(
       );
 
       if (response.isError) {
+        await sendToolProgress(extra, {
+          progress: 2,
+          total: 2,
+          message: "Read failed",
+        });
         logFailedToolResponse(config, {
           tool: toolNames.read,
           workspaceId,
@@ -735,6 +803,11 @@ export function createMcpServer(
         path: input.path,
         success: true,
         durationMs: Math.round(performance.now() - startedAt),
+      });
+      await sendToolProgress(extra, {
+        progress: 2,
+        total: 2,
+        message: "Read complete",
       });
 
       return {
@@ -775,8 +848,13 @@ export function createMcpServer(
       ...toolWidgetDescriptorMeta(config, "write"),
       annotations: WRITE_TOOL_ANNOTATIONS,
     },
-    async ({ workspaceId, ...input }) => {
+    async ({ workspaceId, ...input }, extra) => {
       const startedAt = performance.now();
+      await sendToolProgress(extra, {
+        progress: 1,
+        total: 3,
+        message: `Writing ${input.path}`,
+      });
       const workspace = workspaces.getWorkspace(workspaceId);
       workspaces.resolvePath(workspace, input.path);
       const response = await writeFileTool(input, {
@@ -785,6 +863,11 @@ export function createMcpServer(
       });
 
       if (response.isError) {
+        await sendToolProgress(extra, {
+          progress: 3,
+          total: 3,
+          message: "Write failed",
+        });
         logFailedToolResponse(config, {
           tool: toolNames.write,
           workspaceId,
@@ -794,6 +877,11 @@ export function createMcpServer(
       }
 
       const patch = newFilePatch(input.path, input.content);
+      await sendToolProgress(extra, {
+        progress: 2,
+        total: 3,
+        message: "Preparing write diff",
+      });
       const stats = countDiffStats(patch);
       const summary = {
         ...stats,
@@ -806,6 +894,11 @@ export function createMcpServer(
         path: input.path,
         success: true,
         durationMs: Math.round(performance.now() - startedAt),
+      });
+      await sendToolProgress(extra, {
+        progress: 3,
+        total: 3,
+        message: "Write complete",
       });
 
       return {
@@ -862,8 +955,13 @@ export function createMcpServer(
       ...toolWidgetDescriptorMeta(config, "edit"),
       annotations: EDIT_TOOL_ANNOTATIONS,
     },
-    async ({ workspaceId, ...input }) => {
+    async ({ workspaceId, ...input }, extra) => {
       const startedAt = performance.now();
+      await sendToolProgress(extra, {
+        progress: 1,
+        total: 3,
+        message: `Editing ${input.path}`,
+      });
       const workspace = workspaces.getWorkspace(workspaceId);
       workspaces.resolvePath(workspace, input.path);
       const response = await editFileTool(input, {
@@ -872,6 +970,11 @@ export function createMcpServer(
       });
 
       if (response.isError) {
+        await sendToolProgress(extra, {
+          progress: 3,
+          total: 3,
+          message: "Edit failed",
+        });
         logFailedToolResponse(config, {
           tool: toolNames.edit,
           workspaceId,
@@ -883,6 +986,11 @@ export function createMcpServer(
       const stats = countDiffStats(
         response.details?.patch ?? response.details?.diff,
       );
+      await sendToolProgress(extra, {
+        progress: 2,
+        total: 3,
+        message: "Preparing edit diff",
+      });
       const summary = {
         ...stats,
         editCount: input.edits.length,
@@ -895,6 +1003,11 @@ export function createMcpServer(
         path: input.path,
         success: true,
         durationMs: Math.round(performance.now() - startedAt),
+      });
+      await sendToolProgress(extra, {
+        progress: 3,
+        total: 3,
+        message: "Edit complete",
       });
 
       return {
@@ -944,8 +1057,13 @@ export function createMcpServer(
         ...toolWidgetDescriptorMeta(config, "show_changes"),
         annotations: { readOnlyHint: true },
       },
-      async ({ workspaceId, since, markReviewed }) => {
+      async ({ workspaceId, since, markReviewed }, extra) => {
         const startedAt = performance.now();
+        await sendToolProgress(extra, {
+          progress: 1,
+          total: 3,
+          message: "Collecting workspace changes",
+        });
         const workspace = workspaces.getWorkspace(workspaceId);
         const review = await reviewCheckpoints.reviewChanges({
           workspaceId,
@@ -955,11 +1073,21 @@ export function createMcpServer(
         });
 
         const content = [textBlock(review.result)];
+        await sendToolProgress(extra, {
+          progress: 2,
+          total: 3,
+          message: "Preparing review card",
+        });
         logToolCall(config, {
           tool: "show_changes",
           workspaceId,
           success: true,
           durationMs: Math.round(performance.now() - startedAt),
+        });
+        await sendToolProgress(extra, {
+          progress: 3,
+          total: 3,
+          message: "Changes ready",
         });
 
         return {
@@ -1008,8 +1136,13 @@ export function createMcpServer(
         ...toolWidgetDescriptorMeta(config, "search"),
         annotations: { readOnlyHint: true },
       },
-      async ({ workspaceId, ...input }) => {
+      async ({ workspaceId, ...input }, extra) => {
         const startedAt = performance.now();
+        await sendToolProgress(extra, {
+          progress: 1,
+          total: 2,
+          message: `Searching ${input.path ?? "."}`,
+        });
         const workspace = workspaces.getWorkspace(workspaceId);
         if (input.path) workspaces.resolvePath(workspace, input.path);
         const response = await grepFilesTool(input, {
@@ -1018,6 +1151,11 @@ export function createMcpServer(
         });
 
         if (response.isError) {
+          await sendToolProgress(extra, {
+            progress: 2,
+            total: 2,
+            message: "Search failed",
+          });
           logFailedToolResponse(config, {
             tool: toolNames.grep,
             workspaceId,
@@ -1037,6 +1175,11 @@ export function createMcpServer(
           path: input.path,
           success: true,
           durationMs: Math.round(performance.now() - startedAt),
+        });
+        await sendToolProgress(extra, {
+          progress: 2,
+          total: 2,
+          message: "Search complete",
         });
 
         return {
@@ -1078,8 +1221,13 @@ export function createMcpServer(
         ...toolWidgetDescriptorMeta(config, "search"),
         annotations: { readOnlyHint: true },
       },
-      async ({ workspaceId, ...input }) => {
+      async ({ workspaceId, ...input }, extra) => {
         const startedAt = performance.now();
+        await sendToolProgress(extra, {
+          progress: 1,
+          total: 2,
+          message: `Finding files in ${input.path ?? "."}`,
+        });
         const workspace = workspaces.getWorkspace(workspaceId);
         if (input.path) workspaces.resolvePath(workspace, input.path);
         const response = await findFilesTool(input, {
@@ -1088,6 +1236,11 @@ export function createMcpServer(
         });
 
         if (response.isError) {
+          await sendToolProgress(extra, {
+            progress: 2,
+            total: 2,
+            message: "Find files failed",
+          });
           logFailedToolResponse(config, {
             tool: toolNames.glob,
             workspaceId,
@@ -1107,6 +1260,11 @@ export function createMcpServer(
           path: input.path,
           success: true,
           durationMs: Math.round(performance.now() - startedAt),
+        });
+        await sendToolProgress(extra, {
+          progress: 2,
+          total: 2,
+          message: "Find files complete",
         });
 
         return {
@@ -1148,8 +1306,13 @@ export function createMcpServer(
         ...toolWidgetDescriptorMeta(config, "directory"),
         annotations: { readOnlyHint: true },
       },
-      async ({ workspaceId, ...input }) => {
+      async ({ workspaceId, ...input }, extra) => {
         const startedAt = performance.now();
+        await sendToolProgress(extra, {
+          progress: 1,
+          total: 2,
+          message: `Listing ${input.path}`,
+        });
         const workspace = workspaces.getWorkspace(workspaceId);
         workspaces.resolvePath(workspace, input.path);
         const response = await listDirectoryTool(input, {
@@ -1158,6 +1321,11 @@ export function createMcpServer(
         });
 
         if (response.isError) {
+          await sendToolProgress(extra, {
+            progress: 2,
+            total: 2,
+            message: "List directory failed",
+          });
           logFailedToolResponse(config, {
             tool: toolNames.ls,
             workspaceId,
@@ -1173,6 +1341,11 @@ export function createMcpServer(
           path: input.path,
           success: true,
           durationMs: Math.round(performance.now() - startedAt),
+        });
+        await sendToolProgress(extra, {
+          progress: 2,
+          total: 2,
+          message: "List directory complete",
         });
 
         return {
@@ -1229,8 +1402,13 @@ export function createMcpServer(
       ...toolWidgetDescriptorMeta(config, "shell"),
       annotations: SHELL_TOOL_ANNOTATIONS,
     },
-      async ({ workspaceId, workingDirectory, ...input }) => {
+      async ({ workspaceId, workingDirectory, ...input }, extra) => {
       const startedAt = performance.now();
+      await sendToolProgress(extra, {
+        progress: 1,
+        total: 2,
+        message: "Running shell command",
+      });
       const workspace = workspaces.getWorkspace(workspaceId);
       const cwd = workspaces.resolveWorkingDirectory(
         workspace,
@@ -1242,6 +1420,11 @@ export function createMcpServer(
       });
 
       if (response.isError) {
+        await sendToolProgress(extra, {
+          progress: 2,
+          total: 2,
+          message: "Shell command failed",
+        });
         logFailedToolResponse(config, {
           tool: toolNames.shell,
           workspaceId,
@@ -1265,6 +1448,11 @@ export function createMcpServer(
         commandLength: input.command.length,
         success: true,
         durationMs: Math.round(performance.now() - startedAt),
+      });
+      await sendToolProgress(extra, {
+        progress: 2,
+        total: 2,
+        message: "Shell command complete",
       });
 
       return {

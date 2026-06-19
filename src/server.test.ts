@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync } from "node:fs";
 import { createServer as createHttpServer } from "node:http";
 import type { AddressInfo } from "node:net";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { loadConfig } from "./config.js";
 import { createServer } from "./server.js";
 
@@ -9,8 +11,10 @@ type ViteManifestEntry = {
   file?: string;
 };
 
+const testRoot = mkdtempSync(join(tmpdir(), "devspace-server-test-"));
 const config = loadConfig({
-  DEVSPACE_CONFIG_DIR: "C:\\tmp\\devspace-server-test-config",
+  DEVSPACE_CONFIG_DIR: join(testRoot, "config"),
+  DEVSPACE_STATE_DIR: join(testRoot, "state"),
   DEVSPACE_ALLOWED_ROOTS: process.cwd(),
   DEVSPACE_OAUTH_OWNER_TOKEN: "test-owner-token-that-is-long-enough",
   DEVSPACE_TRUST_PROXY: "1",

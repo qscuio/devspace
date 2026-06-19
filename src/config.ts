@@ -254,8 +254,8 @@ function parseCloudflareAccessConfig(
 }
 
 function parseWidgetMode(value: string | undefined): WidgetMode {
-  if (!value || value === "full") return "full";
-  if (value === "off" || value === "changes") return value;
+  if (!value) return "changes";
+  if (value === "changes" || value === "full" || value === "off") return value;
 
   throw new Error(`Invalid DEVSPACE_WIDGETS: ${value}`);
 }
