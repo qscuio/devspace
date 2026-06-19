@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
-import { copyFile, mkdir, opendir, readFile, rm, stat } from "node:fs/promises";
+import { copyFile, mkdir, open, opendir, readFile, rm, stat } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import Database from "better-sqlite3";
@@ -34,6 +34,20 @@ export interface QnoteHistoryReadInput {
   id: string;
   root?: string;
   sources?: QnoteHistorySource[];
+  offset?: number;
+  maxBytes?: number;
+}
+
+export interface QnoteHistoryCursor {
+  candidateIndex: number;
+  offset: number;
+}
+
+export interface QnoteHistoryIterateInput {
+  root?: string;
+  sources?: QnoteHistorySource[];
+  cursor?: unknown;
+  limit?: number;
   maxBytes?: number;
 }
 
@@ -41,7 +55,19 @@ export interface QnoteHistoryReadResult {
   status: "ok";
   candidate: QnoteHistoryCandidate;
   content: string;
+  offset: number;
+  nextOffset: number;
+  totalBytes: number;
+  complete: boolean;
   truncated: boolean;
+}
+
+export interface QnoteHistoryIterateResult extends QnoteHistoryReadResult {
+  candidateIndex: number;
+  candidateCount: number;
+  cursor: QnoteHistoryCursor;
+  nextCursor?: QnoteHistoryCursor;
+  completeAll: boolean;
 }
 
 export async function scanHistorySources(
@@ -79,23 +105,84 @@ export async function readHistorySource(
     throw new Error(`History source not found: ${input.id}`);
   }
 
-  if (candidate.kind === "browser_history") {
-    const content = await readBrowserHistory(candidate.path, input.maxBytes ?? 128 * 1024);
-    return {
-      status: "ok",
-      candidate,
-      content,
-      truncated: false,
-    };
-  }
-
-  const maxBytes = input.maxBytes ?? 128 * 1024;
-  const content = await readFile(candidate.path, "utf8");
+  const page = await readHistoryCandidate(candidate, input.offset ?? 0, input.maxBytes ?? 128 * 1024);
   return {
     status: "ok",
     candidate,
-    content: content.length > maxBytes ? content.slice(0, maxBytes) : content,
-    truncated: content.length > maxBytes,
+    ...page,
+  };
+}
+
+export async function iterateHistorySources(
+  input: QnoteHistoryIterateInput = {},
+): Promise<QnoteHistoryIterateResult> {
+  const cursor = parseCursor(input.cursor);
+  const scan = await scanHistorySources({
+    root: input.root,
+    sources: input.sources,
+    limit: input.limit ?? 5000,
+  });
+  if (scan.candidates.length === 0) {
+    throw new Error("No history sources found.");
+  }
+  if (cursor.candidateIndex >= scan.candidates.length) {
+    throw new Error(`History cursor candidateIndex is out of range: ${cursor.candidateIndex}`);
+  }
+
+  const candidate = scan.candidates[cursor.candidateIndex]!;
+  const page = await readHistoryCandidate(candidate, cursor.offset, input.maxBytes ?? 128 * 1024);
+  const nextCursor = page.complete
+    ? cursor.candidateIndex + 1 < scan.candidates.length
+      ? { candidateIndex: cursor.candidateIndex + 1, offset: 0 }
+      : undefined
+    : { candidateIndex: cursor.candidateIndex, offset: page.nextOffset };
+
+  return {
+    status: "ok",
+    candidate,
+    ...page,
+    candidateIndex: cursor.candidateIndex,
+    candidateCount: scan.candidates.length,
+    cursor,
+    nextCursor,
+    completeAll: nextCursor === undefined,
+  };
+}
+
+async function readHistoryCandidate(
+  candidate: QnoteHistoryCandidate,
+  offset: number,
+  maxBytes: number,
+): Promise<Omit<QnoteHistoryReadResult, "status" | "candidate">> {
+  if (candidate.kind === "browser_history") {
+    const content = await readBrowserHistory(candidate.path);
+    return pageBuffer(Buffer.from(content, "utf8"), offset, maxBytes);
+  }
+
+  return readFilePage(candidate.path, offset, maxBytes);
+}
+
+function parseCursor(value: unknown): QnoteHistoryCursor {
+  if (value === undefined || value === null) {
+    return { candidateIndex: 0, offset: 0 };
+  }
+  if (typeof value === "string") {
+    return parseCursor(JSON.parse(value) as unknown);
+  }
+  if (typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("History cursor must be an object or JSON object string.");
+  }
+  const record = value as Record<string, unknown>;
+  if (!Number.isInteger(record.candidateIndex) || Number(record.candidateIndex) < 0) {
+    throw new Error("History cursor candidateIndex must be a non-negative integer.");
+  }
+  if (!Number.isInteger(record.offset) || Number(record.offset) < 0) {
+    throw new Error("History cursor offset must be a non-negative integer.");
+  }
+
+  return {
+    candidateIndex: Number(record.candidateIndex),
+    offset: Number(record.offset),
   };
 }
 
@@ -314,7 +401,7 @@ async function inferTitle(filePath: string, kind: QnoteHistoryCandidate["kind"])
   return basename(filePath);
 }
 
-async function readBrowserHistory(filePath: string, maxBytes: number): Promise<string> {
+async function readBrowserHistory(filePath: string): Promise<string> {
   const tempPath = join(tmpdir(), `devspace-browser-history-${randomUUID()}.sqlite`);
   await mkdir(dirname(tempPath), { recursive: true });
   await copyFile(filePath, tempPath);
@@ -328,13 +415,111 @@ async function readBrowserHistory(filePath: string, maxBytes: number): Promise<s
         .map((row) => `${row.lastVisitTime ?? ""}\t${row.title ?? ""}\t${row.url}`)
         .join("\n");
       const output = content || rows.map((row) => `${row.lastVisitTime ?? ""}\t${row.title ?? ""}\t${row.url}`).join("\n");
-      return output.length > maxBytes ? output.slice(0, maxBytes) : output;
+      return output;
     } finally {
       db.close();
     }
   } finally {
     await rm(tempPath, { force: true });
   }
+}
+
+async function readFilePage(filePath: string, offset: number, maxBytes: number): Promise<{
+  content: string;
+  offset: number;
+  nextOffset: number;
+  totalBytes: number;
+  complete: boolean;
+  truncated: boolean;
+}> {
+  if (!Number.isInteger(offset) || offset < 0) {
+    throw new Error(`Invalid history offset: ${offset}`);
+  }
+  if (!Number.isInteger(maxBytes) || maxBytes < 1) {
+    throw new Error(`Invalid history maxBytes: ${maxBytes}`);
+  }
+
+  const metadata = await stat(filePath);
+  if (offset > metadata.size) {
+    throw new Error(`History offset is beyond end of file: ${offset}`);
+  }
+  if (offset === metadata.size) {
+    return {
+      content: "",
+      offset,
+      nextOffset: offset,
+      totalBytes: metadata.size,
+      complete: true,
+      truncated: false,
+    };
+  }
+
+  const handle = await open(filePath, "r");
+  try {
+    const buffer = Buffer.alloc(Math.min(maxBytes, metadata.size - offset));
+    const { bytesRead } = await handle.read(buffer, 0, buffer.length, offset);
+    const safeBytes = validUtf8PrefixLength(buffer.subarray(0, bytesRead));
+    const consumed = safeBytes > 0 ? safeBytes : bytesRead;
+    const nextOffset = offset + consumed;
+    const complete = nextOffset >= metadata.size;
+    return {
+      content: buffer.subarray(0, consumed).toString("utf8"),
+      offset,
+      nextOffset,
+      totalBytes: metadata.size,
+      complete,
+      truncated: !complete,
+    };
+  } finally {
+    await handle.close();
+  }
+}
+
+function pageBuffer(buffer: Buffer, offset: number, maxBytes: number): {
+  content: string;
+  offset: number;
+  nextOffset: number;
+  totalBytes: number;
+  complete: boolean;
+  truncated: boolean;
+} {
+  if (!Number.isInteger(offset) || offset < 0) {
+    throw new Error(`Invalid history offset: ${offset}`);
+  }
+  if (!Number.isInteger(maxBytes) || maxBytes < 1) {
+    throw new Error(`Invalid history maxBytes: ${maxBytes}`);
+  }
+  if (offset > buffer.length) {
+    throw new Error(`History offset is beyond end of content: ${offset}`);
+  }
+
+  const slice = buffer.subarray(offset, Math.min(buffer.length, offset + maxBytes));
+  const safeBytes = validUtf8PrefixLength(slice);
+  const consumed = safeBytes > 0 ? safeBytes : slice.length;
+  const nextOffset = offset + consumed;
+  const complete = nextOffset >= buffer.length;
+  return {
+    content: slice.subarray(0, consumed).toString("utf8"),
+    offset,
+    nextOffset,
+    totalBytes: buffer.length,
+    complete,
+    truncated: !complete,
+  };
+}
+
+function validUtf8PrefixLength(buffer: Buffer): number {
+  if (buffer.length === 0) return 0;
+  const decoder = new TextDecoder("utf-8", { fatal: true });
+  for (let length = buffer.length; length >= Math.max(0, buffer.length - 3); length -= 1) {
+    try {
+      decoder.decode(buffer.subarray(0, length));
+      return length;
+    } catch {
+      continue;
+    }
+  }
+  return buffer.length;
 }
 
 function browserRows(db: Database.Database): Array<{ url: string; title?: string; lastVisitTime?: number }> {

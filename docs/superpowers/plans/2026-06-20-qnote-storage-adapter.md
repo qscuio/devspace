@@ -132,7 +132,7 @@ Verify `qnote_search`, `qnote_read`, `qnote_capture`, `qnote_sync`, and `qnote_h
 
 - [ ] **Step 4: Register tools**
 
-Use small schemas and return structured JSON. Tool descriptions tell the model to summarize before `qnote_capture`; the tool stores the supplied summary, not raw hidden chat state. The `qnote_history` tool supports `scan` and `read` actions so clients can analyze Claude/Codex/Cursor/ChatGPT/browser histories before deciding what knowledge, lessons, or skills to capture.
+Use small schemas and return structured JSON. Tool descriptions tell the model to summarize before `qnote_capture`; the tool stores the supplied summary, not raw hidden chat state. The `qnote_history` tool supports `scan`, `read`, and `iterate` actions so clients can analyze Claude/Codex/Cursor/ChatGPT/browser histories before deciding what knowledge, lessons, or skills to capture. `read` pages one long session with `offset`/`nextOffset`; `iterate` walks all discovered sessions with a stateless cursor and must be called until `completeAll` is true. Summarization should use a staged pipeline: per-session chunk summaries first, then cross-session dedupe and classification over short summaries, then `qnote_capture`.
 
 - [ ] **Step 5: Verify tool tests pass**
 

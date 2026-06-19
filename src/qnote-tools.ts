@@ -2,7 +2,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import * as z from "zod/v4";
 import type { ServerConfig } from "./config.js";
 import { createQnoteStore, type QnoteCaptureInput } from "./qnote.js";
-import { readHistorySource, scanHistorySources } from "./qnote-history.js";
+import { iterateHistorySources, readHistorySource, scanHistorySources } from "./qnote-history.js";
 
 export function registerQnoteTools(server: McpServer, config: ServerConfig): void {
   if (!config.qnote.enabled) return;
@@ -73,29 +73,42 @@ export function registerQnoteTools(server: McpServer, config: ServerConfig): voi
     {
       title: "Inspect AI history",
       description:
-        "Scan or read host-local Claude, Codex, Cursor, ChatGPT export, and browser history sources before summarizing useful knowledge into qnote_capture. Browser history is metadata-only; use ChatGPT official export for full ChatGPT conversation content.",
+        "Scan, page-read, or cursor-iterate host-local Claude, Codex, Cursor, ChatGPT export, and browser history sources before summarizing useful knowledge into qnote_capture. For long sessions, keep calling read with nextOffset or iterate with nextCursor until completeAll is true. Browser history is metadata-only; use ChatGPT official export for full ChatGPT conversation content.",
       inputSchema: {
-        action: z.enum(["scan", "read"]).optional(),
+        action: z.enum(["scan", "read", "iterate"]).optional(),
         id: z.string().optional(),
         root: z.string().optional(),
         sources: z.array(z.enum(["codex", "claude", "cursor", "chatgpt", "browser"])).optional(),
-        limit: z.number().int().positive().max(200).optional(),
+        limit: z.number().int().positive().max(10000).optional(),
+        offset: z.number().int().nonnegative().optional(),
         maxBytes: z.number().int().positive().max(512 * 1024).optional(),
+        cursor: z.union([
+          z.string(),
+          z.object({
+            candidateIndex: z.number().int().nonnegative(),
+            offset: z.number().int().nonnegative(),
+          }),
+        ]).optional(),
       },
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
     async (args) => {
       const input = args as {
-        action?: "scan" | "read";
+        action?: "scan" | "read" | "iterate";
         id?: string;
         root?: string;
         sources?: Array<"codex" | "claude" | "cursor" | "chatgpt" | "browser">;
         limit?: number;
+        offset?: number;
         maxBytes?: number;
+        cursor?: unknown;
       };
       if ((input.action ?? "scan") === "read") {
         if (!input.id) throw new Error("qnote_history read requires id.");
-        return formatToolResult(await readHistorySource(input as { id: string; root?: string; sources?: typeof input.sources; maxBytes?: number }));
+        return formatToolResult(await readHistorySource(input as { id: string; root?: string; sources?: typeof input.sources; offset?: number; maxBytes?: number }));
+      }
+      if (input.action === "iterate") {
+        return formatToolResult(await iterateHistorySources(input));
       }
       return formatToolResult(await scanHistorySources(input));
     },
