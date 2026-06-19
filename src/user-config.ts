@@ -27,6 +27,9 @@ export interface DevspaceUserConfig {
     enabled?: boolean;
     command?: string;
     args?: string[];
+    rawTools?: boolean;
+    dataDir?: string;
+    sessionTtlSeconds?: number;
   };
   cloudflareAccess?: {
     enabled?: boolean;

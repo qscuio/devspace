@@ -49,6 +49,22 @@ assert.deepEqual(
   loadConfig({ ...baseEnv, DEVSPACE_NOTEBOOKLM_ARGS: "server.js,--stdio" }).notebooklm.args,
   ["server.js", "--stdio"],
 );
+assert.equal(loadConfig(baseEnv).notebooklm.rawTools, false);
+assert.equal(loadConfig({ ...baseEnv, DEVSPACE_NOTEBOOKLM_RAW_TOOLS: "1" }).notebooklm.rawTools, true);
+assert.equal(loadConfig(baseEnv).notebooklm.sessionTtlSeconds, 900);
+assert.equal(
+  loadConfig({ ...baseEnv, DEVSPACE_NOTEBOOKLM_SESSION_TTL_SECONDS: "120" }).notebooklm.sessionTtlSeconds,
+  120,
+);
+assert.match(loadConfig(baseEnv).notebooklm.dataDir, /notebooklm$/);
+assert.equal(
+  loadConfig({ ...baseEnv, DEVSPACE_NOTEBOOKLM_DATA_DIR: "C:\\tmp\\notebooklm-data" }).notebooklm.dataDir,
+  "C:\\tmp\\notebooklm-data",
+);
+assert.throws(
+  () => loadConfig({ ...baseEnv, DEVSPACE_NOTEBOOKLM_SESSION_TTL_SECONDS: "0" }),
+  /Invalid DEVSPACE_NOTEBOOKLM_SESSION_TTL_SECONDS: 0/,
+);
 
 assert.throws(
   () => loadConfig({ ...baseEnv, DEVSPACE_WIDGETS: "invalid" }),
@@ -181,6 +197,9 @@ writeFileSync(
       enabled: false,
       command: "node",
       args: ["local-notebooklm.js"],
+      rawTools: true,
+      dataDir: "C:\\tmp\\persisted-notebooklm",
+      sessionTtlSeconds: 120,
     },
   }),
 );
@@ -204,6 +223,9 @@ assert.deepEqual(fileConfig.notebooklm, {
   enabled: false,
   command: "node",
   args: ["local-notebooklm.js"],
+  rawTools: true,
+  dataDir: "C:\\tmp\\persisted-notebooklm",
+  sessionTtlSeconds: 120,
 });
 assert.equal(fileConfig.cloudflareAccess.enabled, false);
 assert.deepEqual(fileConfig.allowedHosts, [

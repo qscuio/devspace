@@ -18,6 +18,7 @@ const DEFAULT_NOTEBOOKLM_ARGS = [
   "@modelcontextprotocol/sdk@1.28.0",
   "notebooklm-mcp",
 ];
+const DEFAULT_NOTEBOOKLM_SESSION_TTL_SECONDS = 900;
 const DEFAULT_OAUTH_ACCESS_TOKEN_TTL_SECONDS = 60 * 60;
 const DEFAULT_OAUTH_REFRESH_TOKEN_TTL_SECONDS = 30 * 24 * 60 * 60;
 
@@ -25,6 +26,9 @@ export interface NotebookLmConfig {
   enabled: boolean;
   command: string;
   args: string[];
+  rawTools: boolean;
+  dataDir: string;
+  sessionTtlSeconds: number;
 }
 
 export interface ServerConfig {
@@ -146,7 +150,15 @@ function parseStringList(value: string | undefined, fallback: string[]): string[
 
 function parseNotebookLmConfig(
   env: NodeJS.ProcessEnv,
-  fileValue: { enabled?: boolean; command?: string; args?: string[] } | undefined,
+  fileValue: {
+    enabled?: boolean;
+    command?: string;
+    args?: string[];
+    rawTools?: boolean;
+    dataDir?: string;
+    sessionTtlSeconds?: number;
+  } | undefined,
+  stateDir: string,
 ): NotebookLmConfig {
   return {
     enabled: env.DEVSPACE_NOTEBOOKLM === undefined
@@ -156,6 +168,17 @@ function parseNotebookLmConfig(
     args: parseStringList(
       env.DEVSPACE_NOTEBOOKLM_ARGS,
       fileValue?.args ?? DEFAULT_NOTEBOOKLM_ARGS,
+    ),
+    rawTools: env.DEVSPACE_NOTEBOOKLM_RAW_TOOLS === undefined
+      ? fileValue?.rawTools ?? false
+      : parseBoolean(env.DEVSPACE_NOTEBOOKLM_RAW_TOOLS),
+    dataDir: resolve(expandHomePath(
+      env.DEVSPACE_NOTEBOOKLM_DATA_DIR ?? fileValue?.dataDir ?? join(stateDir, "notebooklm"),
+    )),
+    sessionTtlSeconds: parsePositiveInteger(
+      env.DEVSPACE_NOTEBOOKLM_SESSION_TTL_SECONDS ?? fileValue?.sessionTtlSeconds?.toString(),
+      DEFAULT_NOTEBOOKLM_SESSION_TTL_SECONDS,
+      "DEVSPACE_NOTEBOOKLM_SESSION_TTL_SECONDS",
     ),
   };
 }
@@ -286,6 +309,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
   const files = loadDevspaceFiles(env);
   const host = env.HOST ?? files.config.host ?? "127.0.0.1";
   const port = parsePort(env.PORT ?? files.config.port);
+  const stateDir = resolve(expandHomePath(env.DEVSPACE_STATE_DIR ?? files.config.stateDir ?? defaultStateDir()));
   const publicBaseUrl = parsePublicBaseUrl(
     env.DEVSPACE_PUBLIC_BASE_URL ?? files.config.publicBaseUrl ?? localPublicBaseUrl(host, port),
   );
@@ -309,12 +333,12 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     minimalTools: parseMinimalTools(env, files.config.toolMode),
     toolNaming: parseToolNaming(env.DEVSPACE_TOOL_NAMING ?? files.config.toolNaming),
     widgets: parseWidgetMode(env.DEVSPACE_WIDGETS ?? files.config.widgets),
-    stateDir: resolve(expandHomePath(env.DEVSPACE_STATE_DIR ?? files.config.stateDir ?? defaultStateDir())),
+    stateDir,
     worktreeRoot: resolve(expandHomePath(env.DEVSPACE_WORKTREE_ROOT ?? files.config.worktreeRoot ?? defaultWorktreeRoot())),
     skillsEnabled: env.DEVSPACE_SKILLS === undefined ? files.config.skillsEnabled ?? true : parseBoolean(env.DEVSPACE_SKILLS),
     skillPaths: parsePathList(env.DEVSPACE_SKILL_PATHS),
     agentDir: resolve(expandHomePath(env.DEVSPACE_AGENT_DIR ?? files.config.agentDir ?? defaultAgentDir())),
-    notebooklm: parseNotebookLmConfig(env, files.config.notebooklm),
+    notebooklm: parseNotebookLmConfig(env, files.config.notebooklm, stateDir),
     logging: parseLoggingConfig(env),
     cloudflareAccess: parseCloudflareAccessConfig(env, files.config.cloudflareAccess),
   };
