@@ -100,6 +100,15 @@ This does not replace DevSpace OAuth. Use both layers: Cloudflare Access decides
 who can reach the public hostname, and the DevSpace Owner password approves the
 MCP client session.
 
+## NotebookLM
+
+NotebookLM tools are enabled by default and run through the upstream
+`notebooklm-mcp` browser automation package. That package stores Google browser
+state on the host running DevSpace, so treat a VPS deployment as holding a
+logged-in browser profile. Use a dedicated Google account when possible, protect
+the public hostname with Cloudflare Access plus DevSpace OAuth, and set
+`DEVSPACE_NOTEBOOKLM=0` if you do not want NotebookLM exposed from a deployment.
+
 ## Shell Access
 
 The shell tool is powerful by design. It is meant for tests, builds, git, and

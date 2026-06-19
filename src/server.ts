@@ -41,6 +41,11 @@ import { createReviewCheckpointManager } from "./review-checkpoints.js";
 import { formatPathForPrompt } from "./skills.js";
 import { createWorkspaceStore } from "./workspace-store.js";
 import { formatAgentsPath, WorkspaceRegistry } from "./workspaces.js";
+import {
+  createNotebookLmClient,
+  type NotebookLmClient,
+  type NotebookLmClientFactory,
+} from "./notebooklm.js";
 
 type Transport = StreamableHTTPServerTransport;
 const WORKSPACE_APP_URI = "ui://devspace/workspace-app.html";
@@ -202,12 +207,15 @@ function serverInstructions(config: ServerConfig, toolNames: ToolNames): string 
     config.widgets === "changes"
       ? " After creating, editing, or overwriting files, call show_changes once after the related file changes are complete so the user can see the aggregate diff."
       : "";
+  const notebooklm = config.notebooklm.enabled
+    ? " NotebookLM tools are available by default for asking user-provided NotebookLM notebooks, managing the local NotebookLM library, and checking NotebookLM auth health. NotebookLM is best-effort: failures in that bridge do not affect workspace tools."
+    : "";
 
   const shellGuidance = config.shellEnabled
     ? `, and ${toolNames.shell} for tests, builds, git inspection, package scripts, and commands that are better executed by the shell. Do not create or modify files with ${toolNames.shell}; avoid shell redirection, heredocs, tee, sed -i, perl -i, node/python/ruby scripts, or any command whose purpose is to write project files`
     : ". Shell execution is disabled for this server";
 
-  return `Use DevSpace as a local coding workspace. Call ${toolNames.openWorkspace} once per project folder or worktree to obtain a workspaceId. Reuse that same workspaceId for all later file, search, edit, write, show-changes, and enabled shell tools in that folder; do not call ${toolNames.openWorkspace} again unless switching folders/worktrees, changing checkout/worktree mode, the workspaceId is rejected as unknown, or the user explicitly asks to reopen. ${agentsMd}${skills}${inspection}Prefer ${toolNames.edit} for targeted modifications, ${toolNames.write} only for new files or complete rewrites${shellGuidance}.${showChanges}`;
+  return `Use DevSpace as a local coding workspace. Call ${toolNames.openWorkspace} once per project folder or worktree to obtain a workspaceId. Reuse that same workspaceId for all later file, search, edit, write, show-changes, and enabled shell tools in that folder; do not call ${toolNames.openWorkspace} again unless switching folders/worktrees, changing checkout/worktree mode, the workspaceId is rejected as unknown, or the user explicitly asks to reopen. ${agentsMd}${skills}${inspection}Prefer ${toolNames.edit} for targeted modifications, ${toolNames.write} only for new files or complete rewrites${shellGuidance}.${showChanges}${notebooklm}`;
 }
 function resultOutputSchema(extra: z.ZodRawShape = {}): z.ZodRawShape {
   return {
@@ -463,10 +471,102 @@ async function assertWorkspaceAppAssets(): Promise<void> {
   }
 }
 
-function createMcpServer(
+function registerNotebookLmTools(
+  server: McpServer,
+  config: ServerConfig,
+  notebookLmClientFactory: NotebookLmClientFactory,
+): void {
+  if (!config.notebooklm.enabled) return;
+
+  let notebooklmClient: NotebookLmClient | undefined;
+  const client = () => {
+    notebooklmClient ??= notebookLmClientFactory();
+    return notebooklmClient;
+  };
+  const callNotebookLm = (name: string, args?: Record<string, unknown>) =>
+    client().callTool(name, args);
+
+  server.registerTool(
+    "notebooklm_get_health",
+    {
+      title: "NotebookLM health",
+      description:
+        "Check NotebookLM MCP health, authentication state, active sessions, and configuration.",
+      annotations: { readOnlyHint: true, openWorldHint: true },
+    },
+    async () => callNotebookLm("get_health"),
+  );
+
+  server.registerTool(
+    "notebooklm_setup_auth",
+    {
+      title: "NotebookLM setup auth",
+      description:
+        "Open NotebookLM Google authentication in a browser window and save the browser state. The user enters Google credentials directly.",
+      inputSchema: {
+        show_browser: z.boolean().optional(),
+        browser_options: z.unknown().optional(),
+      },
+      annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
+    },
+    async (args) => callNotebookLm("setup_auth", args),
+  );
+
+  server.registerTool(
+    "notebooklm_list_notebooks",
+    {
+      title: "List NotebookLM notebooks",
+      description: "List notebooks saved in the NotebookLM MCP library.",
+      annotations: { readOnlyHint: true, openWorldHint: true },
+    },
+    async () => callNotebookLm("list_notebooks"),
+  );
+
+  server.registerTool(
+    "notebooklm_add_notebook",
+    {
+      title: "Add NotebookLM notebook",
+      description:
+        "Add a NotebookLM notebook share URL to the local NotebookLM MCP library with metadata.",
+      inputSchema: {
+        url: z.string(),
+        name: z.string(),
+        description: z.string(),
+        topics: z.array(z.string()),
+        tags: z.array(z.string()).optional(),
+        use_cases: z.array(z.string()).optional(),
+        content_types: z.array(z.string()).optional(),
+      },
+      annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
+    },
+    async (args) => callNotebookLm("add_notebook", args),
+  );
+
+  server.registerTool(
+    "notebooklm_ask_question",
+    {
+      title: "Ask NotebookLM",
+      description:
+        "Ask a question against a NotebookLM notebook URL, notebook ID, or active notebook. Use for best-effort source-grounded research from user-provided notebooks.",
+      inputSchema: {
+        question: z.string(),
+        notebook_url: z.string().optional(),
+        notebook_id: z.string().optional(),
+        session_id: z.string().optional(),
+        show_browser: z.boolean().optional(),
+        browser_options: z.unknown().optional(),
+      },
+      annotations: { readOnlyHint: true, openWorldHint: true },
+    },
+    async (args) => callNotebookLm("ask_question", args),
+  );
+}
+
+export function createMcpServer(
   config: ServerConfig,
   workspaces: WorkspaceRegistry,
   reviewCheckpoints: ReturnType<typeof createReviewCheckpointManager>,
+  notebookLmClientFactory: NotebookLmClientFactory = () => createNotebookLmClient(config.notebooklm),
 ): McpServer {
   const toolNames = toolNamesFor(config);
   const server = new McpServer(
@@ -481,6 +581,8 @@ function createMcpServer(
       instructions: serverInstructions(config, toolNames),
     },
   );
+
+  registerNotebookLmTools(server, config, notebookLmClientFactory);
 
   registerAppResource(
     server,

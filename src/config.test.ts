@@ -29,6 +29,26 @@ assert.equal(loadConfig({ ...baseEnv, DEVSPACE_SKILLS: "1" }).skillsEnabled, tru
 assert.equal(loadConfig(baseEnv).shellEnabled, true);
 assert.equal(loadConfig({ ...baseEnv, DEVSPACE_SHELL: "0" }).shellEnabled, false);
 assert.equal(loadConfig({ ...baseEnv, DEVSPACE_SHELL: "1" }).shellEnabled, true);
+assert.equal(loadConfig(baseEnv).notebooklm.enabled, true);
+assert.equal(loadConfig({ ...baseEnv, DEVSPACE_NOTEBOOKLM: "0" }).notebooklm.enabled, false);
+assert.equal(loadConfig({ ...baseEnv, DEVSPACE_NOTEBOOKLM: "1" }).notebooklm.enabled, true);
+assert.equal(loadConfig(baseEnv).notebooklm.command, "npx");
+assert.deepEqual(loadConfig(baseEnv).notebooklm.args, [
+  "-y",
+  "-p",
+  "notebooklm-mcp@1.2.1",
+  "-p",
+  "@modelcontextprotocol/sdk@1.28.0",
+  "notebooklm-mcp",
+]);
+assert.equal(
+  loadConfig({ ...baseEnv, DEVSPACE_NOTEBOOKLM_COMMAND: "node" }).notebooklm.command,
+  "node",
+);
+assert.deepEqual(
+  loadConfig({ ...baseEnv, DEVSPACE_NOTEBOOKLM_ARGS: "server.js,--stdio" }).notebooklm.args,
+  ["server.js", "--stdio"],
+);
 
 assert.throws(
   () => loadConfig({ ...baseEnv, DEVSPACE_WIDGETS: "invalid" }),
@@ -157,6 +177,11 @@ writeFileSync(
     toolMode: "full",
     toolNaming: "legacy",
     widgets: "off",
+    notebooklm: {
+      enabled: false,
+      command: "node",
+      args: ["local-notebooklm.js"],
+    },
   }),
 );
 writeFileSync(
@@ -175,6 +200,11 @@ assert.equal(fileConfig.skillsEnabled, false);
 assert.equal(fileConfig.minimalTools, false);
 assert.equal(fileConfig.toolNaming, "legacy");
 assert.equal(fileConfig.widgets, "off");
+assert.deepEqual(fileConfig.notebooklm, {
+  enabled: false,
+  command: "node",
+  args: ["local-notebooklm.js"],
+});
 assert.equal(fileConfig.cloudflareAccess.enabled, false);
 assert.deepEqual(fileConfig.allowedHosts, [
   "localhost",

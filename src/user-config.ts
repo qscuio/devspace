@@ -23,6 +23,11 @@ export interface DevspaceUserConfig {
   stateDir?: string;
   worktreeRoot?: string;
   agentDir?: string;
+  notebooklm?: {
+    enabled?: boolean;
+    command?: string;
+    args?: string[];
+  };
   cloudflareAccess?: {
     enabled?: boolean;
     teamDomain?: string;

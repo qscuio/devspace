@@ -128,6 +128,27 @@ DEVSPACE_SKILL_PATHS="$HOME/.codex/skills,$HOME/.claude/skills" \
 npx @waishnav/devspace serve
 ```
 
+## NotebookLM
+
+DevSpace exposes NotebookLM tools by default with a `notebooklm_` prefix. The
+bridge starts the upstream `notebooklm-mcp` stdio server lazily, only when a
+NotebookLM tool is called. If that upstream browser automation is unstable in
+your environment, disable only the NotebookLM bridge:
+
+```bash
+DEVSPACE_NOTEBOOKLM=0 npx @waishnav/devspace serve
+```
+
+| Variable | Default |
+| --- | --- |
+| `DEVSPACE_NOTEBOOKLM` | `1` |
+| `DEVSPACE_NOTEBOOKLM_COMMAND` | `npx` |
+| `DEVSPACE_NOTEBOOKLM_ARGS` | `-y,-p,notebooklm-mcp@1.2.1,-p,@modelcontextprotocol/sdk@1.28.0,notebooklm-mcp` |
+
+The default tools are `notebooklm_get_health`, `notebooklm_setup_auth`,
+`notebooklm_list_notebooks`, `notebooklm_add_notebook`, and
+`notebooklm_ask_question`.
+
 ## Logging
 
 | Variable | Default |

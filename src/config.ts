@@ -9,8 +9,23 @@ import { normalizeTeamDomain, type CloudflareAccessConfig } from "./cloudflare-a
 export type ToolNamingMode = "legacy" | "short";
 export type ToolMode = "minimal" | "full";
 export type WidgetMode = "off" | "changes" | "full";
+const DEFAULT_NOTEBOOKLM_COMMAND = "npx";
+const DEFAULT_NOTEBOOKLM_ARGS = [
+  "-y",
+  "-p",
+  "notebooklm-mcp@1.2.1",
+  "-p",
+  "@modelcontextprotocol/sdk@1.28.0",
+  "notebooklm-mcp",
+];
 const DEFAULT_OAUTH_ACCESS_TOKEN_TTL_SECONDS = 60 * 60;
 const DEFAULT_OAUTH_REFRESH_TOKEN_TTL_SECONDS = 30 * 24 * 60 * 60;
+
+export interface NotebookLmConfig {
+  enabled: boolean;
+  command: string;
+  args: string[];
+}
 
 export interface ServerConfig {
   host: string;
@@ -28,6 +43,7 @@ export interface ServerConfig {
   skillsEnabled: boolean;
   skillPaths: string[];
   agentDir: string;
+  notebooklm: NotebookLmConfig;
   logging: LoggingConfig;
   cloudflareAccess: CloudflareAccessConfig;
 }
@@ -126,6 +142,22 @@ function parseStringList(value: string | undefined, fallback: string[]): string[
     .filter(Boolean);
 
   return entries && entries.length > 0 ? entries : fallback;
+}
+
+function parseNotebookLmConfig(
+  env: NodeJS.ProcessEnv,
+  fileValue: { enabled?: boolean; command?: string; args?: string[] } | undefined,
+): NotebookLmConfig {
+  return {
+    enabled: env.DEVSPACE_NOTEBOOKLM === undefined
+      ? fileValue?.enabled ?? true
+      : parseBoolean(env.DEVSPACE_NOTEBOOKLM),
+    command: env.DEVSPACE_NOTEBOOKLM_COMMAND?.trim() || fileValue?.command || DEFAULT_NOTEBOOKLM_COMMAND,
+    args: parseStringList(
+      env.DEVSPACE_NOTEBOOKLM_ARGS,
+      fileValue?.args ?? DEFAULT_NOTEBOOKLM_ARGS,
+    ),
+  };
 }
 
 function parsePositiveInteger(value: string | undefined, fallback: number, name: string): number {
@@ -282,6 +314,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     skillsEnabled: env.DEVSPACE_SKILLS === undefined ? files.config.skillsEnabled ?? true : parseBoolean(env.DEVSPACE_SKILLS),
     skillPaths: parsePathList(env.DEVSPACE_SKILL_PATHS),
     agentDir: resolve(expandHomePath(env.DEVSPACE_AGENT_DIR ?? files.config.agentDir ?? defaultAgentDir())),
+    notebooklm: parseNotebookLmConfig(env, files.config.notebooklm),
     logging: parseLoggingConfig(env),
     cloudflareAccess: parseCloudflareAccessConfig(env, files.config.cloudflareAccess),
   };
