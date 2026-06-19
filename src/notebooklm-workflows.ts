@@ -6,16 +6,13 @@ import {
   type NotebookRecord,
   type NotebookLmLibraryStore,
 } from "./notebooklm-library.js";
+import type { NotebookLmDiscoverer } from "./notebooklm-discovery.js";
 import type { NotebookLmSessionStore, NotebookSessionRecord } from "./notebooklm-sessions.js";
 import {
   NotebookLmClientError,
   type NotebookLmClient,
   type NotebookLmMappedError,
 } from "./notebooklm.js";
-
-export interface NotebookLmDiscoverer {
-  discover(input: { limit: number }): Promise<Array<{ name: string; url: string }>>;
-}
 
 export interface NotebookLmWorkflowsDeps {
   library: NotebookLmLibraryStore;
@@ -300,7 +297,7 @@ export class NotebookLmWorkflows {
     if (!this.deps.discoverer) {
       return {
         status: "browser_failed",
-        message: "NotebookLM account discovery is not wired yet.",
+        message: "NotebookLM account discovery is not configured.",
         repairHint: "Ask by notebook URL or configure the discovery adapter.",
       };
     }

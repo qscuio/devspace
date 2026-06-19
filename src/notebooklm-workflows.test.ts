@@ -54,6 +54,34 @@ assert.equal(status.status, "ok");
 assert.equal(status.authenticated, true);
 assert.equal(status.knownNotebooks, 2);
 
+const discoveryDataDir = mkdtempSync(join(tmpdir(), "devspace-notebooklm-workflows-discovery-test-"));
+const discoveryLibrary = new NotebookLmLibraryStore(discoveryDataDir);
+const discoverySessions = new NotebookLmSessionStore(discoveryDataDir, 900);
+const discoveryWorkflows = new NotebookLmWorkflows({
+  library: discoveryLibrary,
+  sessions: discoverySessions,
+  client,
+  dataDir: discoveryDataDir,
+  discoverer: {
+    async discover(input) {
+      assert.equal(input.limit, 20);
+      return [
+        { name: "Broadcom DNX SDK", url: "https://notebooklm.google.com/notebook/abc" },
+        { name: "StrataXGS", url: "https://notebooklm.google.com/notebook/def" },
+      ];
+    },
+  },
+});
+const discoveryResult = await discoveryWorkflows.discover({ tag: "broadcom" });
+assert.equal(discoveryResult.status, "ok");
+assert.equal(discoveryResult.imported, 2);
+assert.equal((await discoveryLibrary.list()).length, 2);
+assert.deepEqual((await discoveryLibrary.list()).map((record) => record.tags), [["broadcom"], ["broadcom"]]);
+
+const missingDiscovery = await workflows.discover({});
+assert.equal(missingDiscovery.status, "browser_failed");
+assert.equal(missingDiscovery.message, "NotebookLM account discovery is not configured.");
+
 const ambiguous = await workflows.research({ question: "How?", notebook: "Broadcom" });
 assert.equal(ambiguous.status, "ambiguous_notebook");
 assert.equal(ambiguous.candidates?.length, 2);
