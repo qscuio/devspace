@@ -12,6 +12,7 @@ import {
   isReviewTool,
   isSearchTool,
   isShellTool,
+  shouldLoadReviewPayload,
   isToolName,
   isToolResultCard,
   isWriteTool,
@@ -36,6 +37,7 @@ interface MountedPayload {
     hostContext?: HostContext;
     errorMessage?: string | null;
     visibleFileCount?: number;
+    initialOpenPath?: string;
   }): void;
   unmount(): void;
 }
@@ -47,6 +49,7 @@ let hostContext: HostContext | undefined;
 let card: ToolResultCard | null = null;
 let expanded = false;
 let reviewFilesExpanded = false;
+let reviewDetailPath: string | null = null;
 let errorMessage: string | null = null;
 let currentPayload: MountedPayload | null = null;
 let currentPayloadContainer: HTMLElement | null = null;
@@ -81,6 +84,7 @@ async function boot(): Promise<void> {
       card = null;
       expanded = false;
       reviewFilesExpanded = false;
+      reviewDetailPath = null;
       errorMessage = "No result card is available for this tool result.";
       render();
       return;
@@ -89,6 +93,7 @@ async function boot(): Promise<void> {
     card = { ...structured, tool };
     expanded = false;
     reviewFilesExpanded = false;
+    reviewDetailPath = null;
     errorMessage = null;
     render();
   };
@@ -216,7 +221,13 @@ function renderEmpty(message: string, tone: "muted" | "error" = "muted"): void {
 }
 
 async function renderPayloadIfNeeded(): Promise<void> {
-  if (!card || !currentPayloadContainer || (!expanded && !isReviewTool(card.tool))) return;
+  if (
+    !card ||
+    !currentPayloadContainer ||
+    (!expanded && !shouldLoadReviewPayload(card, reviewDetailPath !== null))
+  ) {
+    return;
+  }
 
   const target = currentPayloadContainer;
 
@@ -249,13 +260,19 @@ async function renderPayloadIfNeeded(): Promise<void> {
     return;
   }
 
-  if (isReviewTool(card.tool)) {
+  if (shouldLoadReviewPayload(card, reviewDetailPath !== null)) {
     const visibleFileCount = reviewFilesExpanded
       ? undefined
       : Math.max(3, (card.files ?? []).slice(0, 3).length);
 
     if (currentPayload) {
-      currentPayload.update({ card, hostContext, errorMessage, visibleFileCount });
+      currentPayload.update({
+        card,
+        hostContext,
+        errorMessage,
+        visibleFileCount,
+        initialOpenPath: reviewDetailPath ?? undefined,
+      });
       return;
     }
 
@@ -269,6 +286,7 @@ async function renderPayloadIfNeeded(): Promise<void> {
       hostContext,
       errorMessage,
       visibleFileCount,
+      initialOpenPath: reviewDetailPath ?? undefined,
     });
     return;
   }
@@ -371,7 +389,6 @@ function renderReviewCard(card: ToolResultCard, display: ToolDisplay): void {
   unmountPayload();
 
   const files = card.files ?? [];
-  const summary = card.summary ?? {};
   const visibleFiles = reviewFilesExpanded ? files : files.slice(0, 3);
   const hiddenCount = Math.max(0, files.length - visibleFiles.length);
   const main = element("main", { className: "shell" });
@@ -388,7 +405,11 @@ function renderReviewCard(card: ToolResultCard, display: ToolDisplay): void {
   header.append(icon, titleGroup, renderSummaryBadge(card));
 
   const body = element("div", { className: "review-summary" });
-  currentPayloadContainer = body;
+  if (shouldLoadReviewPayload(card, reviewDetailPath !== null)) {
+    currentPayloadContainer = body;
+  } else {
+    renderReviewSummary(card, body, visibleFiles);
+  }
 
   const actions = element("div", { className: "review-actions" });
   if (hiddenCount > 0) {
@@ -412,6 +433,76 @@ function renderReviewCard(card: ToolResultCard, display: ToolDisplay): void {
   main.append(section);
   appRoot.replaceChildren(main);
   renderPayloadIfNeeded();
+}
+
+function renderReviewSummary(
+  card: ToolResultCard,
+  container: HTMLElement,
+  files: NonNullable<ToolResultCard["files"]>,
+): void {
+  if (errorMessage) {
+    renderStatus(container, errorMessage, "error");
+    return;
+  }
+
+  if (files.length === 0) {
+    if (card.payload?.patch) {
+      const action = element("button", {
+        className: "review-action",
+        type: "button",
+        text: "Load visual diff",
+      });
+      action.addEventListener("click", () => {
+        reviewDetailPath = "";
+        render();
+      });
+      const actions = element("div", { className: "review-actions inline" });
+      actions.append(action);
+      container.replaceChildren(actions);
+      return;
+    }
+
+    renderStatus(container, "No diff hunks to review.");
+    return;
+  }
+
+  const wrapper = element("div", { className: "review-diff" });
+  const list = element("div", { className: "review-diff-files" });
+
+  for (const file of files) {
+    const fileCard = element("div", { className: "review-diff-file" });
+    const button = element("button", {
+      type: "button",
+      className: "review-diff-file-header",
+      ariaExpanded: "false",
+    });
+    button.addEventListener("click", () => {
+      reviewDetailPath = file.path ?? file.previousPath ?? "";
+      render();
+    });
+
+    button.append(
+      element("span", {
+        className: "review-diff-file-name",
+        text: file.path ?? file.previousPath ?? "changed file",
+      }),
+      renderFileStats(file),
+    );
+    fileCard.append(button);
+    list.append(fileCard);
+  }
+
+  wrapper.append(list);
+  container.replaceChildren(wrapper);
+}
+
+function renderFileStats(file: NonNullable<ToolResultCard["files"]>[number]): HTMLElement {
+  const stats = element("span", { className: "review-diff-file-stats" });
+  stats.append(
+    element("span", { className: "add", text: `+${String(file.additions ?? 0)}` }),
+    element("span", { className: "remove", text: `-${String(file.removals ?? 0)}` }),
+  );
+  return stats;
 }
 
 function renderChevron(isExpanded: boolean, visible: boolean): HTMLElement {

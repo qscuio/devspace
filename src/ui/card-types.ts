@@ -150,3 +150,10 @@ export function isExpandableCard(card: ToolResultCard): boolean {
 
   return Boolean(card.payload);
 }
+
+export function shouldLoadReviewPayload(
+  card: ToolResultCard,
+  detailsRequested: boolean,
+): boolean {
+  return isReviewTool(card.tool) && detailsRequested && Boolean(card.payload?.patch);
+}

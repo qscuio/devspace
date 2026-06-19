@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { parsePatchFiles, type FileDiffMetadata, type FileDiffOptions } from "@pierre/diffs";
 import { FileDiff } from "@pierre/diffs/react";
@@ -11,6 +11,7 @@ interface PayloadRendererOptions {
   hostContext?: HostContext;
   errorMessage?: string | null;
   visibleFileCount?: number;
+  initialOpenPath?: string;
 }
 
 interface MountedPayload {
@@ -40,6 +41,7 @@ function ReviewPayload({
   hostContext,
   errorMessage = null,
   visibleFileCount,
+  initialOpenPath,
 }: PayloadRendererOptions) {
   const patch = card.payload?.patch;
   const themeType: ThemeType = hostContext?.theme === "light" ? "light" : "dark";
@@ -47,7 +49,23 @@ function ReviewPayload({
   const visibleFiles = typeof visibleFileCount === "number"
     ? files.slice(0, visibleFileCount)
     : files;
-  const [openFiles, setOpenFiles] = useState(() => new Set<string>());
+  const initialOpenKey = useMemo(
+    () => findFileKeyByPath(files, initialOpenPath),
+    [files, initialOpenPath],
+  );
+  const [openFiles, setOpenFiles] = useState(() =>
+    initialOpenKey ? new Set<string>([initialOpenKey]) : new Set<string>(),
+  );
+
+  useEffect(() => {
+    if (!initialOpenKey) return;
+    setOpenFiles((current) => {
+      if (current.has(initialOpenKey)) return current;
+      const next = new Set(current);
+      next.add(initialOpenKey);
+      return next;
+    });
+  }, [initialOpenKey]);
 
   if (errorMessage) return <StatusLine message={errorMessage} tone="error" />;
   if (!patch) return <StatusLine message="Diff payload is not available." />;
@@ -59,7 +77,7 @@ function ReviewPayload({
     <div className="review-diff">
       <div className="review-diff-files">
         {visibleFiles.map((fileDiff, index) => {
-          const key = fileDiff.cacheKey ?? `${fileDiff.prevName ?? ""}->${fileDiff.name}-${index}`;
+          const key = fileKey(fileDiff, index);
           const stats = diffStats(fileDiff);
           const isOpen = openFiles.has(key);
 
@@ -99,6 +117,26 @@ function ReviewPayload({
 function parseFiles(patch: string | undefined): FileDiffMetadata[] {
   if (!patch) return [];
   return parsePatchFiles(patch, "review", true).flatMap((parsedPatch) => parsedPatch.files);
+}
+
+function findFileKeyByPath(
+  files: FileDiffMetadata[],
+  path: string | undefined,
+): string | null {
+  if (!path) return null;
+
+  const index = files.findIndex((file) =>
+    file.name === path ||
+    file.prevName === path ||
+    file.name.endsWith(`/${path}`) ||
+    path.endsWith(`/${file.name}`),
+  );
+
+  return index >= 0 ? fileKey(files[index], index) : null;
+}
+
+function fileKey(fileDiff: FileDiffMetadata, index: number): string {
+  return fileDiff.cacheKey ?? `${fileDiff.prevName ?? ""}->${fileDiff.name}-${index}`;
 }
 
 function diffStats(fileDiff: FileDiffMetadata): { additions: number; removals: number } {
