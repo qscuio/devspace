@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { NotebookLmLibraryStore } from "./notebooklm-library.js";
@@ -68,6 +68,42 @@ assert.equal(answer.sessionRefreshed, true);
 const followup = await workflows.research({ question: "Follow up", notebook: "dnx" });
 assert.equal(followup.status, "ok");
 assert.equal(calls.at(-1)?.args?.session_id, "new-session");
+assert.equal(followup.sessionRefreshed, false);
+assert.equal(JSON.parse(readFileSync(join(dataDir, "sessions.json"), "utf8"))[0]?.messageCount, 2);
+
+const directUrlDataDir = mkdtempSync(join(tmpdir(), "devspace-notebooklm-workflows-direct-url-test-"));
+const directUrlLibrary = new NotebookLmLibraryStore(directUrlDataDir);
+const directUrlSessions = new NotebookLmSessionStore(directUrlDataDir, 900);
+const directUrlCalls: Array<{ name: string; args?: Record<string, unknown> }> = [];
+const directUrlClient: NotebookLmClient = {
+  async callTool(name, args) {
+    directUrlCalls.push({ name, args });
+    if (name === "get_health") {
+      return { content: [{ type: "text", text: "ok" }], structuredContent: { authenticated: true, status: "ok" } };
+    }
+    if (name === "ask_question") {
+      return {
+        content: [{ type: "text", text: "answer" }],
+        structuredContent: { session_id: "url-session", answer: "answer" },
+      };
+    }
+    return { content: [{ type: "text", text: "ok" }] };
+  },
+  async close() {},
+};
+const directUrlWorkflows = new NotebookLmWorkflows({
+  library: directUrlLibrary,
+  sessions: directUrlSessions,
+  client: directUrlClient,
+  dataDir: directUrlDataDir,
+});
+const directUrlAnswer = await directUrlWorkflows.research({
+  question: "How?",
+  notebook_url: "https://notebooklm.google.com/notebook/xyz",
+});
+assert.equal(directUrlAnswer.status, "ok");
+assert.equal(directUrlAnswer.notebook?.id, "xyz");
+assert.equal(directUrlCalls.at(-1)?.args?.notebook_url, "https://notebooklm.google.com/notebook/xyz");
 
 const failureDataDir = mkdtempSync(join(tmpdir(), "devspace-notebooklm-workflows-failure-test-"));
 const failureLibrary = new NotebookLmLibraryStore(failureDataDir);
@@ -94,7 +130,7 @@ const failureWorkflows = new NotebookLmWorkflows({
   client: failureClient,
   dataDir: failureDataDir,
 });
-await failureLibrary.upsert({
+const failureNotebook = await failureLibrary.upsert({
   url: "https://notebooklm.google.com/notebook/abc",
   name: "Broadcom DNX SDK",
   aliases: ["dnx"],
@@ -103,12 +139,18 @@ await failureLibrary.upsert({
   tags: ["broadcom"],
   source: "manual",
 });
+await failureSessions.saveSession({
+  notebookId: failureNotebook.id,
+  notebookUrl: failureNotebook.url,
+  upstreamSessionId: "existing-session",
+});
 
 const failure = await failureWorkflows.research({ question: "How?", notebook: "dnx" });
 assert.equal(failure.status, "browser_failed");
 assert.equal(failure.notebook?.id, "abc");
 assert.equal(failure.repairPlan?.code, "browser_failed");
 assert.match(failure.repairPlan?.message ?? "", /browser closed/);
+assert.equal(JSON.parse(readFileSync(join(failureDataDir, "sessions.json"), "utf8"))[0]?.messageCount, 1);
 
 const retryDataDir = mkdtempSync(join(tmpdir(), "devspace-notebooklm-workflows-retry-test-"));
 const retryLibrary = new NotebookLmLibraryStore(retryDataDir);
@@ -160,3 +202,72 @@ assert.equal(retried.status, "ok");
 assert.equal(retryAskCalls.length, 2);
 assert.equal(retryAskCalls[0]?.args?.session_id, "stale-session");
 assert.equal(retryAskCalls[1]?.args?.session_id, undefined);
+
+const healthyDataDir = mkdtempSync(join(tmpdir(), "devspace-notebooklm-workflows-healthy-test-"));
+const healthyLibrary = new NotebookLmLibraryStore(healthyDataDir);
+const healthySessions = new NotebookLmSessionStore(healthyDataDir, 900);
+const healthyClient: NotebookLmClient = {
+  async callTool(name, args) {
+    if (name === "get_health") {
+      return { content: [{ type: "text", text: "ok" }], structuredContent: { authenticated: true, status: "healthy" } };
+    }
+    if (name === "ask_question") {
+      return {
+        content: [{ type: "text", text: "answer" }],
+        structuredContent: { session_id: args?.session_id ?? "healthy-session", answer: "answer" },
+      };
+    }
+    return { content: [{ type: "text", text: "ok" }] };
+  },
+  async close() {},
+};
+const healthyWorkflows = new NotebookLmWorkflows({
+  library: healthyLibrary,
+  sessions: healthySessions,
+  client: healthyClient,
+  dataDir: healthyDataDir,
+});
+await healthyLibrary.upsert({
+  url: "https://notebooklm.google.com/notebook/abc",
+  name: "Broadcom DNX SDK",
+  aliases: ["dnx"],
+  description: "DNX docs",
+  topics: ["DNX"],
+  tags: ["broadcom"],
+  source: "manual",
+});
+assert.equal((await healthyWorkflows.status({})).status, "ok");
+assert.equal((await healthyWorkflows.research({ question: "Healthy?", notebook: "dnx" })).status, "ok");
+
+const nonErrorDataDir = mkdtempSync(join(tmpdir(), "devspace-notebooklm-workflows-non-error-test-"));
+const nonErrorLibrary = new NotebookLmLibraryStore(nonErrorDataDir);
+const nonErrorSessions = new NotebookLmSessionStore(nonErrorDataDir, 900);
+const nonErrorClient: NotebookLmClient = {
+  async callTool(name) {
+    if (name === "get_health") {
+      return { content: [{ type: "text", text: "ok" }], structuredContent: { authenticated: true, status: "ok" } };
+    }
+    if (name === "ask_question") throw "upstream string failure";
+    return { content: [{ type: "text", text: "ok" }] };
+  },
+  async close() {},
+};
+const nonErrorWorkflows = new NotebookLmWorkflows({
+  library: nonErrorLibrary,
+  sessions: nonErrorSessions,
+  client: nonErrorClient,
+  dataDir: nonErrorDataDir,
+});
+await nonErrorLibrary.upsert({
+  url: "https://notebooklm.google.com/notebook/abc",
+  name: "Broadcom DNX SDK",
+  aliases: ["dnx"],
+  description: "DNX docs",
+  topics: ["DNX"],
+  tags: ["broadcom"],
+  source: "manual",
+});
+const nonErrorFailure = await nonErrorWorkflows.research({ question: "How?", notebook: "dnx" });
+assert.equal(nonErrorFailure.status, "upstream_unavailable");
+assert.equal(nonErrorFailure.repairPlan?.code, "upstream_unavailable");
+assert.match(nonErrorFailure.repairPlan?.message ?? "", /upstream string failure/);
