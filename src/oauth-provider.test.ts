@@ -78,6 +78,14 @@ const refreshedTokens = await restartedProvider.exchangeRefreshToken(
 );
 assert.ok(refreshedTokens.access_token);
 assert.ok(refreshedTokens.refresh_token);
+const retriedRefreshTokens = await restartedProvider.exchangeRefreshToken(
+  restartedClient,
+  issuedTokens.refresh_token,
+  ["devspace"],
+  providerUrl,
+);
+assert.ok(retriedRefreshTokens.access_token);
+assert.ok(retriedRefreshTokens.refresh_token);
 
 async function authorizeWithOwnerToken(
   provider: SingleUserOAuthProvider,

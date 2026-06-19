@@ -397,8 +397,6 @@ export class SingleUserOAuthProvider implements OAuthServerProvider {
       throw new AccessDeniedError("Refresh token cannot grant requested scopes");
     }
 
-    this.refreshTokens.delete(hashToken(refreshToken));
-    this.persistTokens();
     return this.issueTokens(client.client_id, requestedScopes, resource ?? record.resource);
   }
 
