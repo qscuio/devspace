@@ -203,8 +203,14 @@ export class NotebookLmWorkflows {
     try {
       return await this.askAndSave({ input, notebook, sessionId });
     } catch (error) {
-      if (!sessionId || !isSessionRelatedError(error)) throw error;
-      return this.askAndSave({ input, notebook });
+      if (sessionId && isSessionRelatedError(error)) {
+        try {
+          return await this.askAndSave({ input, notebook });
+        } catch (retryError) {
+          return failureResponseFromError(retryError, notebook);
+        }
+      }
+      return failureResponseFromError(error, notebook);
     }
   }
 
@@ -276,7 +282,13 @@ export class NotebookLmWorkflows {
     };
     if (input.sessionId) args.session_id = input.sessionId;
 
-    const result = await this.deps.client.callTool("ask_question", args);
+    let result: CallToolResult;
+    try {
+      result = await this.deps.client.callTool("ask_question", args);
+    } catch (error) {
+      if (error instanceof Error) throw new NotebookLmUpstreamCallError(error);
+      throw error;
+    }
     const structured = structuredContent(result);
     const returnedSessionId = typeof structured.session_id === "string"
       ? structured.session_id
@@ -323,14 +335,45 @@ function repairPlanFromError(error: unknown): NotebookLmRepairPlan {
   };
 }
 
+function failureResponseFromError(
+  error: unknown,
+  notebook: NotebookRecord,
+): Extract<NotebookLmResearchResponse, { repairPlan: NotebookLmRepairPlan }> {
+  const upstreamError = upstreamCallErrorCause(error);
+  if (!upstreamError) throw error;
+  const repairPlan = repairPlanFromError(upstreamError);
+  return {
+    status: repairPlan.code as NotebookLmWorkflowFailureStatus,
+    notebook,
+    repairPlan,
+  };
+}
+
 function isSessionRelatedError(error: unknown): boolean {
-  if (error instanceof NotebookLmClientError && error.code === "auth_state_stale") return true;
-  const message = error instanceof Error ? error.message : String(error);
+  const upstreamError = upstreamCallErrorCause(error) ?? error;
+  if (upstreamError instanceof NotebookLmClientError && upstreamError.code === "auth_state_stale") return true;
+  const message = upstreamError instanceof Error ? upstreamError.message : String(upstreamError);
   const normalized = message.toLowerCase();
   return normalized.includes("session") ||
     normalized.includes("expired") ||
     normalized.includes("stale") ||
     normalized.includes("invalid session");
+}
+
+class NotebookLmUpstreamCallError extends Error {
+  override readonly cause: Error;
+
+  constructor(cause: Error) {
+    super(cause.message, { cause });
+    this.name = "NotebookLmUpstreamCallError";
+    this.cause = cause;
+  }
+}
+
+function upstreamCallErrorCause(error: unknown): Error | undefined {
+  if (error instanceof NotebookLmUpstreamCallError) return error.cause;
+  if (error instanceof NotebookLmClientError) return error;
+  return undefined;
 }
 
 function notebookContains(record: NotebookRecord, query: string): boolean {
