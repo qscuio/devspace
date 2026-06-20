@@ -53,6 +53,17 @@ try {
     /\*/,
   );
 
+  const openidDiscoveryResponse = await fetch(`${baseUrl}/.well-known/openid-configuration`);
+  assert.equal(openidDiscoveryResponse.status, 200);
+  const openidDiscovery = await openidDiscoveryResponse.json() as {
+    issuer?: string;
+    authorization_endpoint?: string;
+    token_endpoint?: string;
+  };
+  assert.equal(openidDiscovery.issuer, `${config.publicBaseUrl}/`);
+  assert.equal(openidDiscovery.authorization_endpoint, `${config.publicBaseUrl}/authorize`);
+  assert.equal(openidDiscovery.token_endpoint, `${config.publicBaseUrl}/token`);
+
   const uploadToken = authRefreshManager.createUploadToken();
   const uploadResponse = await fetch(`${baseUrl}/notebooklm/auth-refresh/upload`, {
     method: "POST",

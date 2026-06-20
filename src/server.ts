@@ -1640,6 +1640,23 @@ export function createServer(config = loadConfig(), deps: ServerDependencies = {
     next();
   });
 
+  app.get("/.well-known/openid-configuration", (_req, res) => {
+    res.setHeader("Access-Control-Allow-Origin", "*");
+    res.json({
+      issuer: new URL(config.publicBaseUrl).href,
+      authorization_endpoint: new URL("/authorize", config.publicBaseUrl).href,
+      response_types_supported: ["code"],
+      code_challenge_methods_supported: ["S256"],
+      token_endpoint: new URL("/token", config.publicBaseUrl).href,
+      token_endpoint_auth_methods_supported: ["client_secret_post", "none"],
+      grant_types_supported: ["authorization_code", "refresh_token"],
+      scopes_supported: config.oauth.scopes,
+      revocation_endpoint: new URL("/revoke", config.publicBaseUrl).href,
+      revocation_endpoint_auth_methods_supported: ["client_secret_post"],
+      registration_endpoint: new URL("/register", config.publicBaseUrl).href,
+    });
+  });
+
   app.use(
     mcpAuthRouter({
       provider: oauthProvider,
