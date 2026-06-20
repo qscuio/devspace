@@ -47,6 +47,14 @@ try {
   assert.ok(names.includes("notebooklm"));
   assert.ok(!names.includes("qnote_search"));
   assert.ok(!names.includes("notebooklm_research"));
+
+  const openWorkspace = tools.tools.find((tool) => tool.name === "open_workspace");
+  assert.equal(openWorkspace?._meta?.["openai/toolInvocation/invoking"], "Opening workspace");
+  assert.equal(openWorkspace?._meta?.["openai/toolInvocation/invoked"], "Opened workspace");
+
+  const shell = tools.tools.find((tool) => tool.name === "bash");
+  assert.equal(shell?._meta?.["openai/toolInvocation/invoking"], "Running shell");
+  assert.equal(shell?._meta?.["openai/toolInvocation/invoked"], "Ran shell");
 } finally {
   await client.close();
   await server.close();

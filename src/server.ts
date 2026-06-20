@@ -114,6 +114,8 @@ type ToolWidgetKind =
   | "show_changes";
 
 interface ToolDefinitionMeta extends Record<string, unknown> {
+  "openai/toolInvocation/invoking": string;
+  "openai/toolInvocation/invoked": string;
   ui: {
     resourceUri: string;
     visibility: ["model"];
@@ -121,6 +123,8 @@ interface ToolDefinitionMeta extends Record<string, unknown> {
 }
 
 type EmptyToolDefinitionMeta = Record<string, unknown> & {
+  "openai/toolInvocation/invoking": string;
+  "openai/toolInvocation/invoked": string;
   "ui/resourceUri"?: string;
 };
 
@@ -139,14 +143,44 @@ function shouldAttachWidget(mode: WidgetMode, kind: ToolWidgetKind): boolean {
   }
 }
 
+function toolInvocationStatus(kind: ToolWidgetKind): {
+  invoking: string;
+  invoked: string;
+} {
+  switch (kind) {
+    case "workspace":
+      return { invoking: "Opening workspace", invoked: "Opened workspace" };
+    case "read":
+      return { invoking: "Reading file", invoked: "Read file" };
+    case "write":
+      return { invoking: "Writing file", invoked: "Wrote file" };
+    case "edit":
+      return { invoking: "Editing file", invoked: "Edited file" };
+    case "search":
+      return { invoking: "Searching files", invoked: "Searched files" };
+    case "directory":
+      return { invoking: "Listing directory", invoked: "Listed directory" };
+    case "shell":
+      return { invoking: "Running shell", invoked: "Ran shell" };
+    case "show_changes":
+      return { invoking: "Checking changes", invoked: "Checked changes" };
+  }
+}
+
 function toolWidgetDescriptorMeta(
   config: ServerConfig,
   kind: ToolWidgetKind,
 ): ToolWidgetDescriptorMeta {
-  if (!shouldAttachWidget(config.widgets, kind)) return { _meta: {} };
+  const status = toolInvocationStatus(kind);
+  const baseMeta = {
+    "openai/toolInvocation/invoking": status.invoking,
+    "openai/toolInvocation/invoked": status.invoked,
+  };
+  if (!shouldAttachWidget(config.widgets, kind)) return { _meta: baseMeta };
 
   return {
     _meta: {
+      ...baseMeta,
       ui: {
         resourceUri: WORKSPACE_APP_URI,
         visibility: ["model"],
