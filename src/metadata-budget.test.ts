@@ -39,9 +39,14 @@ try {
   const tools = await client.listTools();
   const metadataBytes = Buffer.byteLength(JSON.stringify(tools.tools), "utf8");
   assert.ok(
-    metadataBytes <= 12_000,
+    metadataBytes <= 8_000,
     `tool metadata is too large: ${metadataBytes} bytes`,
   );
+  const names = tools.tools.map((tool) => tool.name);
+  assert.ok(names.includes("qnote"));
+  assert.ok(names.includes("notebooklm"));
+  assert.ok(!names.includes("qnote_search"));
+  assert.ok(!names.includes("notebooklm_research"));
 } finally {
   await client.close();
   await server.close();

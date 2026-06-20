@@ -19,6 +19,7 @@ export interface DevspaceUserConfig {
   skillsEnabled?: boolean;
   toolMode?: "minimal" | "full";
   toolNaming?: "legacy" | "short";
+  extraToolMode?: "compact" | "split";
   widgets?: "off" | "changes" | "full";
   stateDir?: string;
   worktreeRoot?: string;

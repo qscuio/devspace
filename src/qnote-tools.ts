@@ -4,10 +4,46 @@ import type { ServerConfig } from "./config.js";
 import { createQnoteStore, type QnoteCaptureInput } from "./qnote.js";
 import { iterateHistorySources, readHistorySource, scanHistorySources } from "./qnote-history.js";
 
+type QnoteHistorySources = Array<"codex" | "claude" | "cursor" | "chatgpt" | "browser">;
+
 export function registerQnoteTools(server: McpServer, config: ServerConfig): void {
   if (!config.qnote.enabled) return;
 
   const store = createQnoteStore(config.qnote);
+  if (config.extraToolMode === "compact") {
+    server.registerTool(
+      "qnote",
+      {
+        title: "Qnote",
+        description: "Qnote action: sync, search, read, capture, or history.",
+        inputSchema: {
+          action: z.enum(["sync", "search", "read", "capture", "history"]),
+          input: z.record(z.string(), z.unknown()).optional(),
+        },
+        annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
+      },
+      async (args) => {
+        const { action, input = {} } = args as {
+          action: "sync" | "search" | "read" | "capture" | "history";
+          input?: Record<string, unknown>;
+        };
+
+        switch (action) {
+          case "sync":
+            return formatToolResult(await store.sync());
+          case "search":
+            return formatToolResult(await store.search(input as { query: string; limit?: number }));
+          case "read":
+            return formatToolResult(await store.read(input as { path: string; maxBytes?: number }));
+          case "capture":
+            return formatToolResult(await store.capture(input as unknown as QnoteCaptureInput));
+          case "history":
+            return formatToolResult(await runHistory(input as QnoteHistoryInput));
+        }
+      },
+    );
+    return;
+  }
 
   server.registerTool(
     "qnote_sync",
@@ -93,26 +129,37 @@ export function registerQnoteTools(server: McpServer, config: ServerConfig): voi
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
     async (args) => {
-      const input = args as {
-        action?: "scan" | "read" | "iterate";
-        id?: string;
-        root?: string;
-        sources?: Array<"codex" | "claude" | "cursor" | "chatgpt" | "browser">;
-        limit?: number;
-        offset?: number;
-        maxBytes?: number;
-        cursor?: unknown;
-      };
-      if ((input.action ?? "scan") === "read") {
-        if (!input.id) throw new Error("qnote_history read requires id.");
-        return formatToolResult(await readHistorySource(input as { id: string; root?: string; sources?: typeof input.sources; offset?: number; maxBytes?: number }));
-      }
-      if (input.action === "iterate") {
-        return formatToolResult(await iterateHistorySources(input));
-      }
-      return formatToolResult(await scanHistorySources(input));
+      return formatToolResult(await runHistory(args as QnoteHistoryInput));
     },
   );
+}
+
+type QnoteHistoryInput = {
+  action?: "scan" | "read" | "iterate";
+  id?: string;
+  root?: string;
+  sources?: QnoteHistorySources;
+  limit?: number;
+  offset?: number;
+  maxBytes?: number;
+  cursor?: unknown;
+};
+
+async function runHistory(input: QnoteHistoryInput): Promise<unknown> {
+  if ((input.action ?? "scan") === "read") {
+    if (!input.id) throw new Error("qnote_history read requires id.");
+    return readHistorySource(input as {
+      id: string;
+      root?: string;
+      sources?: QnoteHistorySources;
+      offset?: number;
+      maxBytes?: number;
+    });
+  }
+  if (input.action === "iterate") {
+    return iterateHistorySources(input);
+  }
+  return scanHistorySources(input);
 }
 
 function formatToolResult(value: unknown) {

@@ -40,6 +40,39 @@ export function registerNotebookLmTools(
     discoverer: new BrowserNotebookLmDiscoverer(),
   });
 
+  if (config.extraToolMode === "compact") {
+    server.registerTool(
+      "notebooklm",
+      {
+        title: "NotebookLM",
+        description: "NotebookLM action: status, discover, library, or research.",
+        inputSchema: {
+          action: z.enum(["status", "discover", "library", "research"]),
+          input: z.record(z.string(), z.unknown()).optional(),
+        },
+        annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
+      },
+      async (args) => {
+        const { action, input = {} } = args as {
+          action: "status" | "discover" | "library" | "research";
+          input?: Record<string, unknown>;
+        };
+
+        switch (action) {
+          case "status":
+            return formatToolResult(await workflows.status(input as NotebookLmStatusInput));
+          case "discover":
+            return formatToolResult(await workflows.discover(input as NotebookLmDiscoverInput));
+          case "library":
+            return formatToolResult(await runLibraryWorkflow(workflows, input as NotebookLmLibraryToolInput));
+          case "research":
+            return formatToolResult(await workflows.research(input as unknown as NotebookLmResearchInput));
+        }
+      },
+    );
+    return;
+  }
+
   server.registerTool(
     "notebooklm_status",
     {

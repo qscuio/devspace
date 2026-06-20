@@ -8,6 +8,7 @@ import { normalizeTeamDomain, type CloudflareAccessConfig } from "./cloudflare-a
 
 export type ToolNamingMode = "legacy" | "short";
 export type ToolMode = "minimal" | "full";
+export type ExtraToolMode = "compact" | "split";
 export type WidgetMode = "off" | "changes" | "full";
 const DEFAULT_NOTEBOOKLM_COMMAND = "npx";
 const DEFAULT_NOTEBOOKLM_ARGS = [
@@ -68,6 +69,7 @@ export interface ServerConfig {
   shellEnabled: boolean;
   minimalTools: boolean;
   toolNaming: ToolNamingMode;
+  extraToolMode: ExtraToolMode;
   widgets: WidgetMode;
   stateDir: string;
   worktreeRoot: string;
@@ -258,6 +260,13 @@ function parseToolNaming(value: string | undefined): ToolNamingMode {
   throw new Error(`Invalid DEVSPACE_TOOL_NAMING: ${value}`);
 }
 
+function parseExtraToolMode(value: string | undefined): ExtraToolMode {
+  if (!value || value === "compact") return "compact";
+  if (value === "split") return "split";
+
+  throw new Error(`Invalid DEVSPACE_EXTRA_TOOL_MODE: ${value}`);
+}
+
 function parseLoggingConfig(env: NodeJS.ProcessEnv): LoggingConfig {
   return {
     level: parseLogLevel(env.DEVSPACE_LOG_LEVEL),
@@ -389,6 +398,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     shellEnabled: env.DEVSPACE_SHELL === undefined ? files.config.shellEnabled ?? true : parseBoolean(env.DEVSPACE_SHELL),
     minimalTools: parseMinimalTools(env, files.config.toolMode),
     toolNaming: parseToolNaming(env.DEVSPACE_TOOL_NAMING ?? files.config.toolNaming),
+    extraToolMode: parseExtraToolMode(env.DEVSPACE_EXTRA_TOOL_MODE ?? files.config.extraToolMode),
     widgets: parseWidgetMode(env.DEVSPACE_WIDGETS ?? files.config.widgets),
     stateDir,
     worktreeRoot: resolve(expandHomePath(env.DEVSPACE_WORKTREE_ROOT ?? files.config.worktreeRoot ?? defaultWorktreeRoot())),

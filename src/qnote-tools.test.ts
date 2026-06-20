@@ -58,30 +58,86 @@ await Promise.all([server.connect(serverTransport), client.connect(clientTranspo
 try {
   const tools = await client.listTools();
   const toolNames = tools.tools.map((tool) => tool.name);
+  assert.ok(toolNames.includes("qnote"));
+  assert.ok(!toolNames.includes("qnote_search"));
+  assert.ok(!toolNames.includes("qnote_read"));
+  assert.ok(!toolNames.includes("qnote_capture"));
+  assert.ok(!toolNames.includes("qnote_sync"));
+  assert.ok(!toolNames.includes("qnote_history"));
+
+  const compactSearch = await client.callTool({
+    name: "qnote",
+    arguments: { action: "search", input: { query: "Find me" } },
+  }) as CallToolResult;
+  assert.equal(compactSearch.structuredContent?.status, "ok");
+
+  const compactCapture = await client.callTool({
+    name: "qnote",
+    arguments: {
+      action: "capture",
+      input: {
+        destination: "knowledge/tool-capture.md",
+        title: "Tool Capture",
+        body: "A summarized lesson from a real session.",
+        sync: false,
+        push: false,
+      },
+    },
+  }) as CallToolResult;
+  assert.equal(compactCapture.structuredContent?.status, "ok");
+} finally {
+  await client.close();
+  await server.close();
+}
+
+const splitConfig = loadConfig({
+  DEVSPACE_CONFIG_DIR: join(testRoot, "split-config"),
+  DEVSPACE_ALLOWED_ROOTS: process.cwd(),
+  DEVSPACE_OAUTH_OWNER_TOKEN: "test-owner-token-that-is-long-enough",
+  DEVSPACE_NOTEBOOKLM: "0",
+  DEVSPACE_QNOTE_DIR: qnoteDir,
+  DEVSPACE_QNOTE_AUTO_PUSH: "0",
+  DEVSPACE_EXTRA_TOOL_MODE: "split",
+});
+const splitWorkspaces = new WorkspaceRegistry(splitConfig, createWorkspaceStore(splitConfig.stateDir));
+const splitServer = createMcpServer(
+  splitConfig,
+  splitWorkspaces,
+  createReviewCheckpointManager(),
+  () => fakeNotebooklm,
+);
+const splitClient = new Client({ name: "devspace-test-client", version: "0.0.0" });
+const [splitClientTransport, splitServerTransport] = InMemoryTransport.createLinkedPair();
+await Promise.all([splitServer.connect(splitServerTransport), splitClient.connect(splitClientTransport)]);
+
+try {
+  const tools = await splitClient.listTools();
+  const toolNames = tools.tools.map((tool) => tool.name);
+  assert.ok(!toolNames.includes("qnote"));
   assert.ok(toolNames.includes("qnote_search"));
   assert.ok(toolNames.includes("qnote_read"));
   assert.ok(toolNames.includes("qnote_capture"));
   assert.ok(toolNames.includes("qnote_sync"));
   assert.ok(toolNames.includes("qnote_history"));
 
-  const search = await client.callTool({
+  const search = await splitClient.callTool({
     name: "qnote_search",
     arguments: { query: "Find me" },
   }) as CallToolResult;
   assert.equal(search.structuredContent?.status, "ok");
 
-  const capture = await client.callTool({
+  const capture = await splitClient.callTool({
     name: "qnote_capture",
     arguments: {
-      destination: "knowledge/tool-capture.md",
+      destination: "knowledge/tool-capture-split.md",
       title: "Tool Capture",
-      body: "A summarized lesson from a real session.",
+      body: "A second summarized lesson from a split-tool session.",
       sync: false,
       push: false,
     },
   }) as CallToolResult;
   assert.equal(capture.structuredContent?.status, "ok");
 } finally {
-  await client.close();
-  await server.close();
+  await splitClient.close();
+  await splitServer.close();
 }

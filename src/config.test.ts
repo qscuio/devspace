@@ -18,6 +18,9 @@ assert.equal(loadConfig({ ...baseEnv, DEVSPACE_WIDGETS: "off" }).widgets, "off")
 assert.equal(loadConfig(baseEnv).toolNaming, "short");
 assert.equal(loadConfig({ ...baseEnv, DEVSPACE_TOOL_NAMING: "short" }).toolNaming, "short");
 assert.equal(loadConfig({ ...baseEnv, DEVSPACE_TOOL_NAMING: "legacy" }).toolNaming, "legacy");
+assert.equal(loadConfig(baseEnv).extraToolMode, "compact");
+assert.equal(loadConfig({ ...baseEnv, DEVSPACE_EXTRA_TOOL_MODE: "compact" }).extraToolMode, "compact");
+assert.equal(loadConfig({ ...baseEnv, DEVSPACE_EXTRA_TOOL_MODE: "split" }).extraToolMode, "split");
 assert.equal(loadConfig(baseEnv).minimalTools, true);
 assert.equal(loadConfig({ ...baseEnv, DEVSPACE_TOOL_MODE: "minimal" }).minimalTools, true);
 assert.equal(loadConfig({ ...baseEnv, DEVSPACE_TOOL_MODE: "full" }).minimalTools, false);
@@ -104,6 +107,10 @@ assert.throws(
 assert.throws(
   () => loadConfig({ ...baseEnv, DEVSPACE_TOOL_NAMING: "invalid" }),
   /Invalid DEVSPACE_TOOL_NAMING: invalid/,
+);
+assert.throws(
+  () => loadConfig({ ...baseEnv, DEVSPACE_EXTRA_TOOL_MODE: "invalid" }),
+  /Invalid DEVSPACE_EXTRA_TOOL_MODE: invalid/,
 );
 
 assert.deepEqual(loadConfig(baseEnv).logging, {
@@ -211,6 +218,7 @@ writeFileSync(
     skillsEnabled: false,
     toolMode: "full",
     toolNaming: "legacy",
+    extraToolMode: "split",
     widgets: "off",
     notebooklm: {
       enabled: false,
@@ -245,6 +253,7 @@ assert.equal(fileConfig.shellEnabled, false);
 assert.equal(fileConfig.skillsEnabled, false);
 assert.equal(fileConfig.minimalTools, false);
 assert.equal(fileConfig.toolNaming, "legacy");
+assert.equal(fileConfig.extraToolMode, "split");
 assert.equal(fileConfig.widgets, "off");
 assert.deepEqual(fileConfig.notebooklm, {
   enabled: false,

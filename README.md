@@ -97,19 +97,21 @@ DevSpace gives ChatGPT tools to:
 - follow project instructions from `AGENTS.md` and `CLAUDE.md`
 - discover local agent skills from your skill folders
 - ask and manage user-provided NotebookLM notebooks through high-level
-  `notebooklm_*` tools
+  `notebooklm` actions
+- search, read, capture, sync, and summarize AI history into qnote through
+  `qnote` actions
 - show tool cards and optional change summaries in ChatGPT Apps-compatible hosts
 
 ## NotebookLM Tools
 
-NotebookLM support is enabled by default. DevSpace exposes high-level tools for
-status checks, best-effort account discovery, local notebook metadata, and
-source-grounded research:
+NotebookLM support is enabled by default. DevSpace exposes one compact
+`notebooklm` tool by default to stay within ChatGPT's connector metadata
+budget. Use its `action` argument for:
 
-- `notebooklm_status`
-- `notebooklm_discover`
-- `notebooklm_library`
-- `notebooklm_research`
+- `status`
+- `discover`
+- `library`
+- `research`
 
 You can ask by exact notebook URL even before discovery has imported that
 notebook. DevSpace keeps a local NotebookLM library and session registry under
@@ -118,7 +120,12 @@ same upstream NotebookLM session.
 
 Discovery is best-effort because NotebookLM does not provide a stable public
 notebook-list API. If discovery cannot see a notebook, use its NotebookLM URL
-directly with `notebooklm_research`.
+directly with the `notebooklm` `research` action.
+
+Set `DEVSPACE_EXTRA_TOOL_MODE=split` if your MCP client works better with
+separate tools such as `notebooklm_research`, `qnote_search`, and
+`qnote_history`. The default `compact` mode is recommended for ChatGPT because
+it reduces connector metadata size.
 
 ## Mental Model
 

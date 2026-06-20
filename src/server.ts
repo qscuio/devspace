@@ -210,8 +210,8 @@ function serverInstructions(config: ServerConfig, toolNames: ToolNames): string 
     : `Use ${toolNames.read}/${toolNames.grep}/${toolNames.glob}/${toolNames.ls} for inspection. `;
   const changes = config.widgets === "changes" ? "Call show_changes after related edits. " : "";
   const extras = [
-    config.notebooklm.enabled ? "NotebookLM tools are best-effort." : "",
-    config.qnote.enabled ? "Use qnote_history to inspect AI history; store distilled notes with qnote_capture." : "",
+    config.notebooklm.enabled ? (config.extraToolMode === "compact" ? "Use notebooklm action research/status/discover/library." : "NotebookLM tools are best-effort.") : "",
+    config.qnote.enabled ? (config.extraToolMode === "compact" ? "Use qnote action history/capture/search/read/sync." : "Use qnote_history to inspect AI history; store distilled notes with qnote_capture.") : "",
   ].filter(Boolean).join(" ");
 
   return `DevSpace exposes local workspaces. Call ${toolNames.openWorkspace} once per folder, reuse workspaceId, read returned instructions/skills when relevant. Prefer ${toolNames.edit} for targeted edits and ${toolNames.write} for full rewrites. ${search}${changes}${extras}`;
