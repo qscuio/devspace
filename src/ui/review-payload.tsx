@@ -43,7 +43,9 @@ function ReviewPayload({
   visibleFileCount,
   initialOpenPath,
 }: PayloadRendererOptions) {
-  const patch = card.payload?.patch;
+  const [loadedPatch, setLoadedPatch] = useState<string | null>(card.payload?.patch ?? null);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const patch = card.payload?.patch ?? loadedPatch ?? undefined;
   const themeType: ThemeType = hostContext?.theme === "light" ? "light" : "dark";
   const files = useMemo(() => parseFiles(patch), [patch]);
   const visibleFiles = typeof visibleFileCount === "number"
@@ -58,6 +60,26 @@ function ReviewPayload({
   );
 
   useEffect(() => {
+    if (card.payload?.patch || !card.payload?.reviewPayloadUrl) return;
+    let cancelled = false;
+    setLoadedPatch(null);
+    setLoadError(null);
+    fetch(card.payload.reviewPayloadUrl)
+      .then(async (response) => {
+        if (!response.ok) throw new Error(`Diff request failed with ${response.status}`);
+        const body = await response.json() as { patch?: unknown };
+        if (typeof body.patch !== "string") throw new Error("Diff response did not include a patch.");
+        if (!cancelled) setLoadedPatch(body.patch);
+      })
+      .catch((error: unknown) => {
+        if (!cancelled) setLoadError(error instanceof Error ? error.message : String(error));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [card.payload?.patch, card.payload?.reviewPayloadUrl]);
+
+  useEffect(() => {
     if (!initialOpenKey) return;
     setOpenFiles((current) => {
       if (current.has(initialOpenKey)) return current;
@@ -68,6 +90,8 @@ function ReviewPayload({
   }, [initialOpenKey]);
 
   if (errorMessage) return <StatusLine message={errorMessage} tone="error" />;
+  if (loadError) return <StatusLine message={loadError} tone="error" />;
+  if (!patch && card.payload?.reviewPayloadUrl) return <StatusLine message="Loading diff..." />;
   if (!patch) return <StatusLine message="Diff payload is not available." />;
   if (files.length === 0) return <StatusLine message="No diff hunks to review." />;
 

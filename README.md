@@ -100,7 +100,8 @@ DevSpace gives ChatGPT tools to:
   `notebooklm` actions
 - search, read, capture, sync, and summarize AI history into qnote through
   `qnote` actions
-- show tool cards and optional change summaries in ChatGPT Apps-compatible hosts
+- show plain Markdown diffs with ChatGPT-native syntax highlighting
+- optionally show DevSpace tool cards in ChatGPT Apps-compatible hosts
 
 ## NotebookLM Tools
 
@@ -126,6 +127,16 @@ Set `DEVSPACE_EXTRA_TOOL_MODE=split` if your MCP client works better with
 separate tools such as `notebooklm_research`, `qnote_search`, and
 `qnote_history`. The default `compact` mode is recommended for ChatGPT because
 it reduces connector metadata size.
+
+## Tool Cards
+
+DevSpace defaults to plain text results with `DEVSPACE_WIDGETS=off`. This keeps
+mobile and desktop ChatGPT sessions from waiting on custom iframe cards. Diffs
+from `show_changes` are returned as fenced `diff` blocks so ChatGPT can use its
+native syntax highlighting.
+
+Set `DEVSPACE_WIDGETS=changes` or `DEVSPACE_WIDGETS=full` only if you want
+DevSpace's custom Apps UI cards.
 
 ## Mental Model
 

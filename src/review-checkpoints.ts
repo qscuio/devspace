@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -23,7 +24,8 @@ export interface ReviewChangesResult {
   result: string;
   summary: ReviewSummary;
   files: ReviewFile[];
-  patch: string;
+  patch?: string;
+  patchId?: string;
 }
 
 interface WorkspaceReviewState {
@@ -41,13 +43,16 @@ export interface ReviewCheckpointManager {
     root: string;
     since?: ReviewSince;
     markReviewed?: boolean;
+    includePatch?: boolean;
   }): Promise<ReviewChangesResult>;
+  readReviewPatch(id: string): Promise<string | undefined>;
 }
 
 const REVIEW_REF_PREFIX = "refs/devspace/review";
 
 export function createReviewCheckpointManager(): ReviewCheckpointManager {
   const states = new Map<string, WorkspaceReviewState>();
+  const patchSources = new Map<string, { gitRoot: string; baseline: string; current: string }>();
 
   return {
     async initializeWorkspace({ workspaceId, root }) {
@@ -71,7 +76,7 @@ export function createReviewCheckpointManager(): ReviewCheckpointManager {
       }
     },
 
-    async reviewChanges({ workspaceId, root, since = "last_shown", markReviewed = true }) {
+    async reviewChanges({ workspaceId, root, since = "last_shown", markReviewed = true, includePatch = true }) {
       let state = states.get(workspaceId);
       if (!state) {
         await this.initializeWorkspace({ workspaceId, root });
@@ -85,14 +90,20 @@ export function createReviewCheckpointManager(): ReviewCheckpointManager {
       const baselineRef = since === "workspace_open" ? state.openRef : state.baselineRef;
       const baseline = (await git(state.gitRoot, ["rev-parse", "--verify", `${baselineRef}^{commit}`])).stdout.trim();
       const current = await createWorkingTreeSnapshot(state.gitRoot);
-      const patch = (await git(state.gitRoot, ["diff", "--binary", "--no-color", baseline, current], {
-        maxBuffer: 50 * 1024 * 1024,
-      })).stdout;
       const numstat = (await git(state.gitRoot, ["diff", "--numstat", "-z", baseline, current], {
         maxBuffer: 50 * 1024 * 1024,
       })).stdout;
       const files = parseNumstat(numstat);
       const summary = summarizeFiles(files);
+      let patch: string | undefined;
+      let patchId: string | undefined;
+
+      if (includePatch) {
+        patch = await readPatch(state.gitRoot, baseline, current);
+      } else if (summary.files > 0) {
+        patchId = randomUUID();
+        patchSources.set(patchId, { gitRoot: state.gitRoot, baseline, current });
+      }
 
       if (markReviewed) {
         await git(state.gitRoot, ["update-ref", state.baselineRef, current]);
@@ -106,9 +117,22 @@ export function createReviewCheckpointManager(): ReviewCheckpointManager {
         summary,
         files,
         patch,
+        patchId,
       };
     },
+
+    async readReviewPatch(id) {
+      const source = patchSources.get(id);
+      if (!source) return undefined;
+      return readPatch(source.gitRoot, source.baseline, source.current);
+    },
   };
+}
+
+async function readPatch(gitRoot: string, baseline: string, current: string): Promise<string> {
+  return (await git(gitRoot, ["diff", "--binary", "--no-color", baseline, current], {
+    maxBuffer: 50 * 1024 * 1024,
+  })).stdout;
 }
 
 function reviewRefs(workspaceId: string): Pick<WorkspaceReviewState, "openRef" | "baselineRef"> {

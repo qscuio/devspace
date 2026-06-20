@@ -62,6 +62,7 @@ export interface ToolPayload {
   content?: ToolContent[];
   diff?: string;
   patch?: string;
+  reviewPayloadUrl?: string;
 }
 
 export function isToolName(value: unknown): value is ToolName {
@@ -213,7 +214,7 @@ export function isExpandableCard(card: ToolResultCard): boolean {
     );
   }
 
-  if (isReviewTool(card.tool)) return Boolean(card.files?.length || card.payload?.patch);
+  if (isReviewTool(card.tool)) return Boolean(card.files?.length || card.payload?.patch || card.payload?.reviewPayloadUrl);
 
   return Boolean(card.payload);
 }
@@ -222,5 +223,5 @@ export function shouldLoadReviewPayload(
   card: ToolResultCard,
   detailsRequested: boolean,
 ): boolean {
-  return isReviewTool(card.tool) && detailsRequested && Boolean(card.payload?.patch);
+  return isReviewTool(card.tool) && detailsRequested && Boolean(card.payload?.patch || card.payload?.reviewPayloadUrl);
 }

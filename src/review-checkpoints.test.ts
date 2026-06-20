@@ -38,7 +38,17 @@ try {
   assert.equal(firstReview.summary.removals, 0);
   assert.equal(firstReview.files.some((file) => file.path === "README.md"), true);
   assert.equal(firstReview.files.some((file) => file.path === "new.txt"), true);
-  assert.match(firstReview.patch, /world/);
+  assert.match(firstReview.patch ?? "", /world/);
+
+  const lazyReview = await manager.reviewChanges({
+    workspaceId: "ws_review",
+    root,
+    markReviewed: false,
+    includePatch: false,
+  });
+  assert.equal(lazyReview.patch, undefined);
+  assert.equal(typeof lazyReview.patchId, "string");
+  assert.match((await manager.readReviewPatch(lazyReview.patchId ?? "")) ?? "", /world/);
 
   const stillUnreviewed = await manager.reviewChanges({
     workspaceId: "ws_review",

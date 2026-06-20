@@ -326,7 +326,7 @@ function parseCloudflareAccessConfig(
 }
 
 function parseWidgetMode(value: string | undefined): WidgetMode {
-  if (!value) return "changes";
+  if (!value) return "off";
   if (value === "changes" || value === "full" || value === "off") return value;
 
   throw new Error(`Invalid DEVSPACE_WIDGETS: ${value}`);

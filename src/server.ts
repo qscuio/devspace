@@ -482,6 +482,15 @@ function countDiffStats(diff: string | undefined): DiffStats {
   return { additions, removals };
 }
 
+function reviewResultText(review: {
+  result: string;
+  patch?: string;
+}): string {
+  const patch = review.patch?.trimEnd();
+  if (!patch) return review.result;
+  return `${review.result}\n\n\`\`\`diff\n${patch}\n\`\`\``;
+}
+
 function newFilePatch(path: string, content: string): string {
   const lines =
     content.length === 0
@@ -740,17 +749,15 @@ export function createMcpServer(
         message: "Opening workspace",
       });
       const { workspace, agentsFiles, availableAgentsFiles } = await workspaces.openWorkspace({ path, mode, baseRef });
-      if (config.widgets === "changes") {
-        await sendToolProgress(extra, {
-          progress: 2,
-          total: 4,
-          message: "Preparing review checkpoint",
-        });
-        void reviewCheckpoints.initializeWorkspace({
-          workspaceId: workspace.id,
-          root: workspace.root,
-        });
-      }
+      await sendToolProgress(extra, {
+        progress: 2,
+        total: 4,
+        message: "Preparing review checkpoint",
+      });
+      void reviewCheckpoints.initializeWorkspace({
+        workspaceId: workspace.id,
+        root: workspace.root,
+      });
       await sendToolProgress(extra, {
         progress: 3,
         total: 4,
@@ -1140,84 +1147,91 @@ export function createMcpServer(
     },
   );
 
-  if (config.widgets === "changes") {
-    registerAppTool(
-      server,
-      "show_changes",
-      {
-        title: "Show changes",
-        description:
-          "Show workspace changes since the last checkpoint.",
-        inputSchema: {
-          workspaceId: z
-            .string()
-            .describe("workspaceId."),
-          since: z
-            .enum(["last_shown", "workspace_open"])
-            .optional()
-            .describe("Diff base."),
-          markReviewed: z
-            .boolean()
-            .optional()
-            .describe("Advance checkpoint."),
+  registerAppTool(
+    server,
+    "show_changes",
+    {
+      title: "Show changes",
+      description:
+        "Show workspace changes since the last checkpoint.",
+      inputSchema: {
+        workspaceId: z
+          .string()
+          .describe("workspaceId."),
+        since: z
+          .enum(["last_shown", "workspace_open"])
+          .optional()
+          .describe("Diff base."),
+        markReviewed: z
+          .boolean()
+          .optional()
+          .describe("Advance checkpoint."),
+      },
+      outputSchema: resultOutputSchema(),
+      ...toolWidgetDescriptorMeta(config, "show_changes"),
+      annotations: { readOnlyHint: true },
+    },
+    async ({ workspaceId, since, markReviewed }, extra) => {
+      const startedAt = performance.now();
+      await sendToolProgress(extra, {
+        progress: 1,
+        total: 3,
+        message: "Collecting workspace changes",
+      });
+      const workspace = workspaces.getWorkspace(workspaceId);
+      const review = await reviewCheckpoints.reviewChanges({
+        workspaceId,
+        root: workspace.root,
+        since: since ?? "last_shown",
+        markReviewed: markReviewed ?? true,
+        includePatch: config.widgets === "off",
+      });
+
+      const content = [textBlock(reviewResultText(review))];
+      await sendToolProgress(extra, {
+        progress: 2,
+        total: 3,
+        message: config.widgets === "off" ? "Formatting diff text" : "Preparing review card",
+      });
+      logToolCall(config, {
+        tool: "show_changes",
+        workspaceId,
+        success: true,
+        durationMs: Math.round(performance.now() - startedAt),
+      });
+      await sendToolProgress(extra, {
+        progress: 3,
+        total: 3,
+        message: "Changes ready",
+      });
+
+      const result = {
+        content,
+        structuredContent: {
+          result: contentText(content),
         },
-        outputSchema: resultOutputSchema(),
-        ...toolWidgetDescriptorMeta(config, "show_changes"),
-        annotations: { readOnlyHint: true },
-      },
-      async ({ workspaceId, since, markReviewed }, extra) => {
-        const startedAt = performance.now();
-        await sendToolProgress(extra, {
-          progress: 1,
-          total: 3,
-          message: "Collecting workspace changes",
-        });
-        const workspace = workspaces.getWorkspace(workspaceId);
-        const review = await reviewCheckpoints.reviewChanges({
-          workspaceId,
-          root: workspace.root,
-          since: since ?? "last_shown",
-          markReviewed: markReviewed ?? true,
-        });
+      };
 
-        const content = [textBlock(review.result)];
-        await sendToolProgress(extra, {
-          progress: 2,
-          total: 3,
-          message: "Preparing review card",
-        });
-        logToolCall(config, {
+      if (config.widgets === "off") return result;
+
+      return {
+        ...result,
+        _meta: {
           tool: "show_changes",
-          workspaceId,
-          success: true,
-          durationMs: Math.round(performance.now() - startedAt),
-        });
-        await sendToolProgress(extra, {
-          progress: 3,
-          total: 3,
-          message: "Changes ready",
-        });
-
-        return {
-          content,
-          _meta: {
-            tool: "show_changes",
-            card: {
-              workspaceId,
-              summary: review.summary,
-              files: review.files,
-              payload: {
-                patch: review.patch,
-              },
-            },
+          card: {
+            workspaceId,
+            summary: review.summary,
+            files: review.files,
+            payload: review.patchId
+              ? {
+                  reviewPayloadUrl: new URL(`/review-payloads/${review.patchId}`, config.publicBaseUrl).toString(),
+                }
+              : undefined,
           },
-          structuredContent: {
-            result: contentText(content),
-          },
-        };
-      },
-    );
-  }
+        },
+      };
+    },
+  );
 
   if (!config.minimalTools) {
     registerAppTool(
@@ -1700,6 +1714,21 @@ export function createServer(config = loadConfig(), deps: ServerDependencies = {
 
   app.get("/healthz", (_req, res) => {
     res.json({ ok: true, name: "devspace" });
+  });
+
+  app.options("/review-payloads/:id", (_req, res) => {
+    setAssetHeaders(res);
+    res.sendStatus(204);
+  });
+
+  app.get("/review-payloads/:id", async (req, res) => {
+    setAssetHeaders(res);
+    const patch = await reviewCheckpoints.readReviewPatch(req.params.id);
+    if (patch === undefined) {
+      res.status(404).json({ ok: false, error: "review payload not found" });
+      return;
+    }
+    res.json({ ok: true, patch });
   });
 
   registerNotebookLmAuthRefreshRoutes(app, config, notebookLmAuthRefreshManager);

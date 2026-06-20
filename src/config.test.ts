@@ -11,7 +11,7 @@ const baseEnv = {
   DEVSPACE_OAUTH_OWNER_TOKEN: "test-owner-token-that-is-long-enough",
 };
 
-assert.equal(loadConfig(baseEnv).widgets, "changes");
+assert.equal(loadConfig(baseEnv).widgets, "off");
 assert.equal(loadConfig({ ...baseEnv, DEVSPACE_WIDGETS: "changes" }).widgets, "changes");
 assert.equal(loadConfig({ ...baseEnv, DEVSPACE_WIDGETS: "full" }).widgets, "full");
 assert.equal(loadConfig({ ...baseEnv, DEVSPACE_WIDGETS: "off" }).widgets, "off");
@@ -219,7 +219,7 @@ writeFileSync(
     toolMode: "full",
     toolNaming: "legacy",
     extraToolMode: "split",
-    widgets: "off",
+    widgets: "changes",
     notebooklm: {
       enabled: false,
       command: "node",
@@ -254,7 +254,7 @@ assert.equal(fileConfig.skillsEnabled, false);
 assert.equal(fileConfig.minimalTools, false);
 assert.equal(fileConfig.toolNaming, "legacy");
 assert.equal(fileConfig.extraToolMode, "split");
-assert.equal(fileConfig.widgets, "off");
+assert.equal(fileConfig.widgets, "changes");
 assert.deepEqual(fileConfig.notebooklm, {
   enabled: false,
   command: "node",

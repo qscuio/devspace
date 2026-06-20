@@ -14,6 +14,16 @@ const reviewCard: ToolResultCard = {
 assert.equal(shouldLoadReviewPayload(reviewCard, false), false);
 assert.equal(shouldLoadReviewPayload(reviewCard, true), true);
 
+const lazyReviewCard: ToolResultCard = {
+  tool: "show_changes",
+  summary: { files: 1, additions: 2, removals: 1 },
+  files: [{ path: "src/example.ts", additions: 2, removals: 1 }],
+  payload: { reviewPayloadUrl: "https://devspace.example.test/review-payloads/abc" },
+};
+
+assert.equal(shouldLoadReviewPayload(lazyReviewCard, false), false);
+assert.equal(shouldLoadReviewPayload(lazyReviewCard, true), true);
+
 const readCard: ToolResultCard = {
   tool: "read",
   payload: { content: [{ type: "text", text: "hello" }] },
