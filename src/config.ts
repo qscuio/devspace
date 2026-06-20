@@ -1,5 +1,5 @@
 import { homedir } from "node:os";
-import { join, resolve } from "node:path";
+import { join, resolve, win32 } from "node:path";
 import { expandHomePath } from "./roots.js";
 import type { LoggingConfig, LogFormat, LogLevel } from "./logger.js";
 import type { OAuthConfig } from "./oauth-provider.js";
@@ -96,7 +96,7 @@ function parsePort(value: string | number | undefined): number {
 function parseAllowedRoots(value: string | string[] | undefined): string[] {
   if (Array.isArray(value)) {
     const roots = value.map((entry) => entry.trim()).filter(Boolean);
-    return (roots.length > 0 ? roots : [process.cwd()]).map((root) => resolve(expandHomePath(root)));
+    return (roots.length > 0 ? roots : [process.cwd()]).map((root) => normalizeConfigPath(root));
   }
 
   const rawRoots =
@@ -106,7 +106,7 @@ function parseAllowedRoots(value: string | string[] | undefined): string[] {
       .filter(Boolean) ?? [];
 
   const roots = rawRoots.length > 0 ? rawRoots : [process.cwd()];
-  return roots.map((root) => resolve(expandHomePath(root)));
+  return roots.map((root) => normalizeConfigPath(root));
 }
 
 function parseAllowedHosts(value: string | string[] | undefined, derivedHosts: string[]): string[] {
@@ -165,8 +165,14 @@ function parsePathList(value: string | undefined): string[] {
       ?.split(",")
       .map((entry) => entry.trim())
       .filter(Boolean)
-      .map((entry) => resolve(expandHomePath(entry))) ?? []
+      .map((entry) => normalizeConfigPath(entry)) ?? []
   );
+}
+
+function normalizeConfigPath(value: string): string {
+  const expanded = expandHomePath(value);
+  const isWindowsAbsolute = /^[A-Za-z]:[\\/]/.test(expanded) || /^\\\\[^\\]/.test(expanded);
+  return isWindowsAbsolute ? win32.normalize(expanded) : resolve(expanded);
 }
 
 function parseStringList(value: string | undefined, fallback: string[]): string[] {
@@ -202,9 +208,9 @@ function parseNotebookLmConfig(
     rawTools: env.DEVSPACE_NOTEBOOKLM_RAW_TOOLS === undefined
       ? fileValue?.rawTools ?? false
       : parseBoolean(env.DEVSPACE_NOTEBOOKLM_RAW_TOOLS),
-    dataDir: resolve(expandHomePath(
+    dataDir: normalizeConfigPath(
       env.DEVSPACE_NOTEBOOKLM_DATA_DIR ?? fileValue?.dataDir ?? join(stateDir, "notebooklm"),
-    )),
+    ),
     sessionTtlSeconds: parsePositiveInteger(
       env.DEVSPACE_NOTEBOOKLM_SESSION_TTL_SECONDS ?? fileValue?.sessionTtlSeconds?.toString(),
       DEFAULT_NOTEBOOKLM_SESSION_TTL_SECONDS,
@@ -229,7 +235,7 @@ function parseQnoteConfig(
     enabled: env.DEVSPACE_QNOTE === undefined
       ? fileValue?.enabled ?? true
       : parseBoolean(env.DEVSPACE_QNOTE),
-    dir: resolve(expandHomePath(env.DEVSPACE_QNOTE_DIR ?? fileValue?.dir ?? join(stateDir, "qnote"))),
+    dir: normalizeConfigPath(env.DEVSPACE_QNOTE_DIR ?? fileValue?.dir ?? join(stateDir, "qnote")),
     repoUrl: env.DEVSPACE_QNOTE_REPO_URL?.trim() || fileValue?.repoUrl || DEFAULT_QNOTE_REPO_URL,
     branch: env.DEVSPACE_QNOTE_BRANCH?.trim() || fileValue?.branch || "main",
     autoPush: env.DEVSPACE_QNOTE_AUTO_PUSH === undefined
@@ -375,7 +381,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
   const files = loadDevspaceFiles(env);
   const host = env.HOST ?? files.config.host ?? "127.0.0.1";
   const port = parsePort(env.PORT ?? files.config.port);
-  const stateDir = resolve(expandHomePath(env.DEVSPACE_STATE_DIR ?? files.config.stateDir ?? defaultStateDir()));
+  const stateDir = normalizeConfigPath(env.DEVSPACE_STATE_DIR ?? files.config.stateDir ?? defaultStateDir());
   const publicBaseUrl = parsePublicBaseUrl(
     env.DEVSPACE_PUBLIC_BASE_URL ?? files.config.publicBaseUrl ?? localPublicBaseUrl(host, port),
   );
@@ -401,10 +407,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     extraToolMode: parseExtraToolMode(env.DEVSPACE_EXTRA_TOOL_MODE ?? files.config.extraToolMode),
     widgets: parseWidgetMode(env.DEVSPACE_WIDGETS ?? files.config.widgets),
     stateDir,
-    worktreeRoot: resolve(expandHomePath(env.DEVSPACE_WORKTREE_ROOT ?? files.config.worktreeRoot ?? defaultWorktreeRoot())),
+    worktreeRoot: normalizeConfigPath(env.DEVSPACE_WORKTREE_ROOT ?? files.config.worktreeRoot ?? defaultWorktreeRoot()),
     skillsEnabled: env.DEVSPACE_SKILLS === undefined ? files.config.skillsEnabled ?? true : parseBoolean(env.DEVSPACE_SKILLS),
     skillPaths: parsePathList(env.DEVSPACE_SKILL_PATHS),
-    agentDir: resolve(expandHomePath(env.DEVSPACE_AGENT_DIR ?? files.config.agentDir ?? defaultAgentDir())),
+    agentDir: normalizeConfigPath(env.DEVSPACE_AGENT_DIR ?? files.config.agentDir ?? defaultAgentDir()),
     notebooklm: parseNotebookLmConfig(env, files.config.notebooklm, stateDir),
     qnote: parseQnoteConfig(env, files.config.qnote, stateDir),
     logging: parseLoggingConfig(env),
