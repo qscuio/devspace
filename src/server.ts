@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { randomUUID, timingSafeEqual } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { access, realpath } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
@@ -23,6 +23,7 @@ import {
   registerArtifactTools,
 } from "./artifact-tools.js";
 import { loadConfig, type ServerConfig, type WidgetMode } from "./config.js";
+import { createCloudflareAccessMiddleware } from "./cloudflare-access.js";
 import {
   createOpenAIIncomingArtifactAdapter,
   type IncomingArtifactAdapter,
@@ -53,6 +54,7 @@ import { createReviewCheckpointManager } from "./review-checkpoints.js";
 import { openAiConversationScopeId } from "./request-meta.js";
 import { shutdownHttpServer } from "./server-shutdown.js";
 import { formatPathForPrompt } from "./skills.js";
+import { sendToolProgress } from "./tool-progress.js";
 import { createWorkspaceStore } from "./workspace-store.js";
 import { formatAgentsPath, WorkspaceRegistry } from "./workspaces.js";
 import { summarizeLocalAgentProfile } from "./local-agent-profiles.js";
@@ -61,6 +63,18 @@ import {
   getLocalAgentProviderAvailabilitySnapshot,
   type LocalAgentProviderAvailability,
 } from "./local-agent-availability.js";
+import {
+  createNotebookLmClient,
+  type NotebookLmClientFactory,
+} from "./notebooklm.js";
+import {
+  createNotebookLmAuthRefreshManager,
+  NotebookLmAuthRefreshError,
+  type NotebookLmAuthRefreshManager,
+} from "./notebooklm-auth-refresh.js";
+import { defaultNotebookLmBrowserStatePath } from "./notebooklm-discovery.js";
+import { registerNotebookLmTools } from "./notebooklm-tools.js";
+import { registerQnoteTools } from "./qnote-tools.js";
 
 type Transport = StreamableHTTPServerTransport;
 // MCP clients can reconnect without closing the previous transport. Bound stale
@@ -123,6 +137,8 @@ type ToolWidgetKind =
   | "show_changes";
 
 interface ToolDefinitionMeta extends Record<string, unknown> {
+  "openai/toolInvocation/invoking": string;
+  "openai/toolInvocation/invoked": string;
   ui: {
     resourceUri: string;
     visibility: ["model"];
@@ -130,6 +146,8 @@ interface ToolDefinitionMeta extends Record<string, unknown> {
 }
 
 type EmptyToolDefinitionMeta = Record<string, unknown> & {
+  "openai/toolInvocation/invoking": string;
+  "openai/toolInvocation/invoked": string;
   "ui/resourceUri"?: string;
 };
 
@@ -152,16 +170,43 @@ function toolWidgetDescriptorMeta(
   config: ServerConfig,
   kind: ToolWidgetKind,
 ): ToolWidgetDescriptorMeta {
-  if (!shouldAttachWidget(config.widgets, kind)) return { _meta: {} };
+  const status = toolInvocationStatus(kind);
+  const baseMeta = {
+    "openai/toolInvocation/invoking": status.invoking,
+    "openai/toolInvocation/invoked": status.invoked,
+  };
+  if (!shouldAttachWidget(config.widgets, kind)) return { _meta: baseMeta };
 
   return {
     _meta: {
+      ...baseMeta,
       ui: {
         resourceUri: WORKSPACE_APP_URI,
         visibility: ["model"],
       },
     },
   };
+}
+
+function toolInvocationStatus(kind: ToolWidgetKind): { invoking: string; invoked: string } {
+  switch (kind) {
+    case "workspace":
+      return { invoking: "Opening workspace", invoked: "Opened workspace" };
+    case "read":
+      return { invoking: "Reading file", invoked: "Read file" };
+    case "write":
+      return { invoking: "Writing file", invoked: "Wrote file" };
+    case "edit":
+      return { invoking: "Editing file", invoked: "Edited file" };
+    case "search":
+      return { invoking: "Searching files", invoked: "Searched files" };
+    case "directory":
+      return { invoking: "Listing directory", invoked: "Listed directory" };
+    case "shell":
+      return { invoking: "Running shell", invoked: "Ran shell" };
+    case "show_changes":
+      return { invoking: "Checking changes", invoked: "Checked changes" };
+  }
 }
 
 const toolNames = {
@@ -195,12 +240,24 @@ function serverInstructions(config: ServerConfig): string {
     ? " When the user supplies or generates a file that is not present on the DevSpace host, use download_artifact with its native file value, the existing workspace ID, and a suitable relative destination path chosen from the user's request and project structure. The tool refuses to overwrite an existing destination and returns the normalized workspace-relative path. Use normal workspace tools when explicit inspection, replacement, movement, renaming, or deletion is needed. Do not recreate binary files with write/edit calls or place signed URLs, native file objects, base64 content, or invented host paths in shell commands or logs."
     : "";
   const showChangesInstruction =
-    config.widgets === "changes"
+    config.widgets !== "full"
       ? " If the turn successfully modifies files by creating, editing, overwriting, deleting, moving, or applying patches, call show_changes exactly once for that workspace after the final related file change and before your final response so the user can inspect the aggregate diff for that turn. Do not call it after every individual file change; do not skip it because individual file-change tools already returned diffs."
       : "";
+  const integrationInstruction = [
+    config.notebooklm.enabled
+      ? config.extraToolMode === "compact"
+        ? " Use the notebooklm tool with the status, discover, library, or research action."
+        : " NotebookLM tools are best-effort and use the notebooklm_ prefix."
+      : "",
+    config.qnote.enabled
+      ? config.extraToolMode === "compact"
+        ? " Use the qnote tool with the sync, search, read, capture, or history action."
+        : " Use qnote_history to inspect AI history and qnote_capture to store distilled notes."
+      : "",
+  ].join("");
 
   if (config.toolMode === "codex") {
-    return `Use DevSpace for coding work. Call ${toolNames.openWorkspace} once for each project folder or isolated worktree, then keep using its workspaceId. During continued work in the same project or worktree, do not call ${toolNames.openWorkspace} again. Open another workspace only when changing projects, switching checkout/worktree mode, creating another isolated worktree, or when the current workspaceId is rejected. Use ${toolNames.read} for direct file reads, apply_patch for all file modifications, exec_command for inspection, tests, builds, and other commands, and write_stdin to poll or interact with running processes. Follow instructions returned by ${toolNames.openWorkspace}; read applicable instruction and skill files before working in their scope.${artifactInstruction}${showChangesInstruction}`;
+    return `Use DevSpace for coding work. Call ${toolNames.openWorkspace} once for each project folder or isolated worktree, then keep using its workspaceId. During continued work in the same project or worktree, do not call ${toolNames.openWorkspace} again. Open another workspace only when changing projects, switching checkout/worktree mode, creating another isolated worktree, or when the current workspaceId is rejected. Use ${toolNames.read} for direct file reads, apply_patch for all file modifications, exec_command for inspection, tests, builds, and other commands, and write_stdin to poll or interact with running processes. Follow instructions returned by ${toolNames.openWorkspace}; read applicable instruction and skill files before working in their scope.${artifactInstruction}${showChangesInstruction}${integrationInstruction}`;
   }
 
   const inspection = config.toolMode !== "full"
@@ -213,7 +270,7 @@ function serverInstructions(config: ServerConfig): string {
 
   const agentsMd = `Follow instructions returned by ${toolNames.openWorkspace}. Before working under a path listed in availableAgentsFiles, use ${toolNames.read} to inspect that instruction file and follow it. `;
 
-  return `Use DevSpace for coding work. Call ${toolNames.openWorkspace} once for each project folder or isolated worktree, then keep using its workspaceId. During continued work in the same project or worktree, do not call ${toolNames.openWorkspace} again. Open another workspace only when changing projects, switching checkout/worktree mode, creating another isolated worktree, or when the current workspaceId is rejected. ${agentsMd}${skills}${inspection}Prefer ${toolNames.edit} for targeted modifications, ${toolNames.write} only for new files or complete rewrites, and ${toolNames.shell} for tests, builds, git inspection, package scripts, and commands that are better executed by the shell. Do not create or modify files with ${toolNames.shell}; avoid shell redirection, heredocs, tee, sed -i, perl -i, node/python/ruby scripts, or any command whose purpose is to write project files.${artifactInstruction}${showChangesInstruction}`;
+  return `Use DevSpace for coding work. Call ${toolNames.openWorkspace} once for each project folder or isolated worktree, then keep using its workspaceId. During continued work in the same project or worktree, do not call ${toolNames.openWorkspace} again. Open another workspace only when changing projects, switching checkout/worktree mode, creating another isolated worktree, or when the current workspaceId is rejected. ${agentsMd}${skills}${inspection}Prefer ${toolNames.edit} for targeted modifications, ${toolNames.write} only for new files or complete rewrites, and ${toolNames.shell} for tests, builds, git inspection, package scripts, and commands that are better executed by the shell. Do not create or modify files with ${toolNames.shell}; avoid shell redirection, heredocs, tee, sed -i, perl -i, node/python/ruby scripts, or any command whose purpose is to write project files.${artifactInstruction}${showChangesInstruction}${integrationInstruction}`;
 }
 
 function formatVisibleAgent(agent: {
@@ -296,6 +353,124 @@ const reviewSummaryOutputSchema = z.object({
   additions: z.number(),
   removals: z.number(),
 });
+
+function registerNotebookLmAuthRefreshRoutes(
+  app: ReturnType<typeof createMcpExpressApp>,
+  config: ServerConfig,
+  manager: NotebookLmAuthRefreshManager,
+): void {
+  app.get("/notebooklm/auth-refresh", (_req, res) => {
+    res.type("html").send(notebookLmAuthRefreshForm());
+  });
+
+  app.post(
+    "/notebooklm/auth-refresh",
+    express.urlencoded({ extended: false, limit: "16kb" }),
+    (req, res) => {
+      const ownerToken = typeof req.body?.owner_token === "string" ? req.body.owner_token : "";
+      if (!safeStringEquals(ownerToken, config.oauth.ownerToken)) {
+        res.status(401).type("html").send(notebookLmAuthRefreshForm("Owner password is incorrect."));
+        return;
+      }
+
+      res.type("html").send(notebookLmAuthRefreshUploadPage(manager.createUploadToken()));
+    },
+  );
+
+  app.post(
+    "/notebooklm/auth-refresh/upload",
+    express.json({ limit: "2mb" }),
+    async (req, res) => {
+      try {
+        const body = isRecord(req.body) ? req.body : {};
+        const token = typeof body.token === "string" ? body.token : "";
+        const result = await manager.uploadState({
+          token,
+          body: "state" in body ? body.state : undefined,
+        });
+        res.json({ ok: true, cookies: result.cookies, origins: result.origins });
+      } catch (error) {
+        if (error instanceof NotebookLmAuthRefreshError) {
+          res.status(error.status).json({ ok: false, code: error.code, message: error.message });
+          return;
+        }
+        throw error;
+      }
+    },
+  );
+}
+
+function notebookLmAuthRefreshForm(error?: string): string {
+  return `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>NotebookLM Auth Refresh</title>
+  <style>
+    body { font-family: system-ui, sans-serif; max-width: 720px; margin: 48px auto; padding: 0 20px; line-height: 1.5; }
+    label { display: block; font-weight: 600; margin-bottom: 8px; }
+    input { box-sizing: border-box; width: 100%; padding: 10px 12px; font: inherit; }
+    button { margin-top: 14px; padding: 10px 14px; font: inherit; }
+    .error { color: #b00020; }
+  </style>
+</head>
+<body>
+  <h1>NotebookLM Auth Refresh</h1>
+  <p>Enter the DevSpace owner password to create a one-time upload token for fresh NotebookLM browser state.</p>
+  ${error ? `<p class="error">${escapeHtml(error)}</p>` : ""}
+  <form method="post" action="/notebooklm/auth-refresh">
+    <label for="owner_token">Owner password</label>
+    <input id="owner_token" name="owner_token" type="password" autocomplete="current-password" autofocus required>
+    <button type="submit">Create upload token</button>
+  </form>
+</body>
+</html>`;
+}
+
+function notebookLmAuthRefreshUploadPage(uploadToken: { token: string; expiresAt: string }): string {
+  const instructions = JSON.stringify({
+    uploadUrl: "/notebooklm/auth-refresh/upload",
+    token: uploadToken.token,
+  }, null, 2);
+  return `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>NotebookLM Upload Token</title>
+  <style>
+    body { font-family: system-ui, sans-serif; max-width: 760px; margin: 48px auto; padding: 0 20px; line-height: 1.5; }
+    code, pre { word-break: break-all; white-space: pre-wrap; }
+    pre { background: #f6f8fa; padding: 14px; border-radius: 6px; }
+  </style>
+</head>
+<body>
+  <h1>NotebookLM Upload Token</h1>
+  <p>This token expires at <code>${escapeHtml(uploadToken.expiresAt)}</code> and can be used once.</p>
+  <pre>${escapeHtml(instructions)}</pre>
+  <p>Upload JSON containing the token and a storage-state object with cookies and origins.</p>
+</body>
+</html>`;
+}
+
+function safeStringEquals(left: string, right: string): boolean {
+  const leftBuffer = Buffer.from(left);
+  const rightBuffer = Buffer.from(right);
+  return leftBuffer.length === rightBuffer.length && timingSafeEqual(leftBuffer, rightBuffer);
+}
+
+function escapeHtml(value: string): string {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
 
 function sendJsonRpcError(
   res: Response,
@@ -396,6 +571,12 @@ function countDiffStats(diff: string | undefined): DiffStats {
   return { additions, removals };
 }
 
+function reviewResultText(review: { result: string; patch?: string }): string {
+  const patch = review.patch?.trimEnd();
+  if (!patch) return review.result;
+  return `${review.result}\n\n\`\`\`diff\n${patch}\n\`\`\``;
+}
+
 function newFilePatch(path: string, content: string): string {
   const lines =
     content.length === 0
@@ -428,8 +609,14 @@ function uiManifestUrl(): URL {
   return new URL("../dist/ui/.vite/manifest.json", import.meta.url);
 }
 
+let workspaceAppManifestCache: WorkspaceAppManifest | null = null;
+let workspaceAppAssetsVerified = false;
+
 function readWorkspaceAppManifest(): WorkspaceAppManifest {
-  return JSON.parse(readFileSync(uiManifestUrl(), "utf8")) as WorkspaceAppManifest;
+  workspaceAppManifestCache ??= JSON.parse(
+    readFileSync(uiManifestUrl(), "utf8"),
+  ) as WorkspaceAppManifest;
+  return workspaceAppManifestCache;
 }
 
 function getWorkspaceAppManifestEntry(): WorkspaceAppManifestEntry {
@@ -447,13 +634,40 @@ function assetUrl(baseUrl: string, assetPath: string): string {
   return `${baseUrl}/${assetPath.replace(/^\/+/, "")}`;
 }
 
-function workspaceAppHtml(config: ServerConfig): string {
+function criticalShellStyles(): string {
+  return `:root{color-scheme:light dark;font-family:ui-sans-serif,system-ui,sans-serif;background:transparent;color:#f5f5f6}*{box-sizing:border-box}html,body{margin:0;background:transparent;overflow:hidden}.shell{width:100%;padding:0;overflow:hidden}.critical-card{width:100%;min-height:86px;border:1px solid color-mix(in srgb,#3a3a40 86%,transparent);border-radius:8px;background:color-mix(in srgb,#28282d 92%,transparent);color:#f5f5f6}.critical-header{display:grid;grid-template-columns:38px minmax(0,1fr) auto;align-items:center;gap:12px;min-height:64px;padding:10px 14px}.critical-icon{display:grid;width:38px;height:38px;place-items:center;border:1px solid color-mix(in srgb,#3a3a40 55%,transparent);border-radius:8px;background:linear-gradient(180deg,color-mix(in srgb,#3a3a42 72%,transparent),color-mix(in srgb,#17181c 90%,transparent));color:#f5f5f6}.critical-icon svg{width:19px;height:19px}.critical-main{display:grid;min-width:0;gap:3px}.critical-title{font-size:13px;font-weight:600}.critical-label{overflow:hidden;color:#d6d6dc;font-family:ui-monospace,SFMono-Regular,monospace;font-size:13px;text-overflow:ellipsis;white-space:nowrap}.critical-badge{display:inline-flex;align-items:center;min-height:24px;padding:0 9px;border:1px solid color-mix(in srgb,#3a3a40 80%,transparent);border-radius:999px;background:color-mix(in srgb,#17181c 42%,transparent);color:#d6d6dc;font-family:ui-monospace,SFMono-Regular,monospace;font-size:12px}.critical-body{display:grid;gap:10px;padding:0 14px 14px}.critical-line{color:#b7b7bf;font-size:13px}.critical-progress-bar{position:relative;overflow:hidden;height:4px;border-radius:999px;background:color-mix(in srgb,#3a3a40 64%,transparent)}.critical-progress-bar span{position:absolute;top:0;bottom:0;left:-35%;width:35%;border-radius:inherit;background:color-mix(in srgb,#f5f5f6 72%,transparent);animation:critical-progress-slide 1.35s ease-in-out infinite}@keyframes critical-progress-slide{0%{transform:translateX(0)}100%{transform:translateX(385%)}}@media (prefers-color-scheme:light){:root{color:#17181c}.critical-card{border-color:#d6d6dc;background:#fff;color:#17181c}.critical-icon{background:#f7f7f8;color:#17181c}.critical-label,.critical-badge{color:#4b4b55}.critical-line{color:#5d5d66}.critical-progress-bar{background:#e5e5e8}.critical-progress-bar span{background:#6f6f78}}`;
+}
+
+function criticalShellMarkup(): string {
+  return `<section class="critical-card" data-critical-shell>
+        <div class="critical-header">
+          <span class="critical-icon" aria-hidden="true">
+            <svg fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8"><circle cx="12" cy="12" r="8" /><path d="M12 8v5l3 2" /></svg>
+          </span>
+          <span class="critical-main">
+            <span class="critical-title">Starting DevSpace tool</span>
+            <span class="critical-label">Loading tool progress...</span>
+          </span>
+          <span class="critical-badge">starting</span>
+        </div>
+        <div class="critical-body">
+          <div class="critical-line">Preparing the tool card...</div>
+          <div class="critical-progress-bar" aria-hidden="true"><span></span></div>
+        </div>
+      </section>`;
+}
+
+export function workspaceAppHtml(config: ServerConfig): string {
   const baseUrl = assetBaseUrl(config);
   const entry = getWorkspaceAppManifestEntry();
+  const scriptUrl = assetUrl(baseUrl, entry.file);
   const stylesheets = (entry.css ?? [])
     .map(
       (stylesheet) =>
-        `    <link rel="stylesheet" crossorigin href="${assetUrl(baseUrl, stylesheet)}" />`,
+        [
+          `    <link rel="preload" as="style" crossorigin href="${assetUrl(baseUrl, stylesheet)}" />`,
+          `    <link rel="stylesheet" crossorigin href="${assetUrl(baseUrl, stylesheet)}" />`,
+        ].join("\n"),
     )
     .join("\n");
 
@@ -463,12 +677,14 @@ function workspaceAppHtml(config: ServerConfig): string {
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>DevSpace Workspace</title>
-    <script type="module" crossorigin src="${assetUrl(baseUrl, entry.file)}"></script>
+    <style id="devspace-critical-shell">${criticalShellStyles()}</style>
+    <link rel="modulepreload" crossorigin href="${scriptUrl}" />
 ${stylesheets}
+    <script type="module" crossorigin src="${scriptUrl}"></script>
   </head>
   <body>
     <main id="app" class="shell">
-      <section class="empty">Waiting for a tool result.</section>
+      ${criticalShellMarkup()}
     </main>
   </body>
 </html>`;
@@ -489,6 +705,10 @@ function uiBuildDirectory(): string {
   return fileURLToPath(new URL("../dist/ui", import.meta.url));
 }
 
+function uiAssetsDirectory(): string {
+  return fileURLToPath(new URL("../dist/ui/assets", import.meta.url));
+}
+
 function setAssetHeaders(res: Response): void {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "GET, HEAD, OPTIONS");
@@ -497,6 +717,7 @@ function setAssetHeaders(res: Response): void {
 }
 
 async function assertWorkspaceAppAssets(): Promise<void> {
+  if (workspaceAppAssetsVerified) return;
   const entry = getWorkspaceAppManifestEntry();
   const candidates = [entry.file, ...(entry.css ?? [])].map(
     (assetPath) => new URL(`../dist/ui/${assetPath}`, import.meta.url),
@@ -505,6 +726,7 @@ async function assertWorkspaceAppAssets(): Promise<void> {
   for (const candidate of candidates) {
     await access(candidate);
   }
+  workspaceAppAssetsVerified = true;
 }
 
 function processResult(snapshot: ProcessSnapshot): string {
@@ -603,8 +825,9 @@ function registerCodexProcessTools(
       ...toolWidgetDescriptorMeta(config, "shell"),
       annotations: SHELL_TOOL_ANNOTATIONS,
     },
-    async ({ workspaceId, cmd, tty, columns, rows, workingDirectory, yieldTimeMs, maxOutputTokens }) => {
+    async ({ workspaceId, cmd, tty, columns, rows, workingDirectory, yieldTimeMs, maxOutputTokens }, extra) => {
       const startedAt = performance.now();
+      await sendToolProgress(extra, { progress: 1, total: 2, message: "Running command" });
       const workspace = workspaces.getWorkspace(workspaceId);
       const cwd = workspaces.resolveWorkingDirectory(workspace, workingDirectory);
       const snapshot = await processSessions.start({
@@ -627,6 +850,11 @@ function registerCodexProcessTools(
         commandLength: cmd.length,
         success: true,
         durationMs: Math.round(performance.now() - startedAt),
+      });
+      await sendToolProgress(extra, {
+        progress: 2,
+        total: 2,
+        message: snapshot.running ? "Command is still running" : "Command complete",
       });
 
       return processToolResponse("exec_command", workspaceId, snapshot, {
@@ -671,8 +899,9 @@ function registerCodexProcessTools(
       ...toolWidgetDescriptorMeta(config, "shell"),
       annotations: SHELL_TOOL_ANNOTATIONS,
     },
-    async ({ workspaceId, sessionId, chars, columns, rows, yieldTimeMs, maxOutputTokens }) => {
+    async ({ workspaceId, sessionId, chars, columns, rows, yieldTimeMs, maxOutputTokens }, extra) => {
       const startedAt = performance.now();
+      await sendToolProgress(extra, { progress: 1, total: 2, message: "Checking process" });
       workspaces.getWorkspace(workspaceId);
       const snapshot = await processSessions.write({
         workspaceId,
@@ -690,6 +919,11 @@ function registerCodexProcessTools(
         success: true,
         durationMs: Math.round(performance.now() - startedAt),
       });
+      await sendToolProgress(extra, {
+        progress: 2,
+        total: 2,
+        message: snapshot.running ? "Process is still running" : "Process complete",
+      });
 
       return processToolResponse("write_stdin", workspaceId, snapshot, {
         sessionId,
@@ -706,9 +940,10 @@ export function createMcpServer(
   config: ServerConfig,
   workspaces: WorkspaceRegistry,
   reviewCheckpoints: ReturnType<typeof createReviewCheckpointManager>,
-  processSessions: ProcessSessionManager,
-  localAgentProviders: LocalAgentProviderAvailability[],
-  incomingArtifactAdapters: readonly IncomingArtifactAdapter[],
+  processSessions: ProcessSessionManager = new ProcessSessionManager(),
+  localAgentProviders: LocalAgentProviderAvailability[] = [],
+  incomingArtifactAdapters: readonly IncomingArtifactAdapter[] = [],
+  notebookLmClientFactory: NotebookLmClientFactory = () => createNotebookLmClient(config.notebooklm),
 ): McpServer {
   const server = new McpServer(
     {
@@ -722,6 +957,9 @@ export function createMcpServer(
       instructions: serverInstructions(config),
     },
   );
+
+  registerNotebookLmTools(server, config, notebookLmClientFactory);
+  registerQnoteTools(server, config);
 
   registerAppResource(
     server,
@@ -804,8 +1042,13 @@ export function createMcpServer(
       ...toolWidgetDescriptorMeta(config, "workspace"),
       annotations: { readOnlyHint: true },
     },
-    async ({ path, mode, baseRef }, { _meta }) => {
+    async ({ path, mode, baseRef }, extra) => {
       const startedAt = performance.now();
+      await sendToolProgress(extra, {
+        progress: 1,
+        total: 3,
+        message: "Opening workspace",
+      });
       const {
         workspace,
         agentsFiles,
@@ -814,9 +1057,14 @@ export function createMcpServer(
         includeBootstrapContext,
       } = await workspaces.openWorkspace(
         { path, mode, baseRef },
-        { conversationScopeId: openAiConversationScopeId(_meta) },
+        { conversationScopeId: openAiConversationScopeId(extra._meta) },
       );
-      if (config.widgets === "changes") {
+      await sendToolProgress(extra, {
+        progress: 2,
+        total: 3,
+        message: "Loading workspace instructions",
+      });
+      if (config.widgets !== "full") {
         await reviewCheckpoints.initializeWorkspace({
           workspaceId: workspace.id,
           root: workspace.root,
@@ -902,6 +1150,11 @@ export function createMcpServer(
         path: workspace.root,
         success: true,
         durationMs: Math.round(performance.now() - startedAt),
+      });
+      await sendToolProgress(extra, {
+        progress: 3,
+        total: 3,
+        message: "Workspace opened",
       });
 
       return {
@@ -998,8 +1251,9 @@ export function createMcpServer(
       ...toolWidgetDescriptorMeta(config, "read"),
       annotations: { readOnlyHint: true },
     },
-    async ({ workspaceId, ...input }) => {
+    async ({ workspaceId, ...input }, extra) => {
       const startedAt = performance.now();
+      await sendToolProgress(extra, { progress: 1, total: 2, message: `Reading ${input.path}` });
       const workspace = workspaces.getWorkspace(workspaceId);
       const readPath = workspaces.resolveReadPath(workspace, input.path);
       const response = await readFileTool(
@@ -1033,6 +1287,7 @@ export function createMcpServer(
         success: true,
         durationMs: Math.round(performance.now() - startedAt),
       });
+      await sendToolProgress(extra, { progress: 2, total: 2, message: "Read complete" });
 
       return {
         ...response,
@@ -1073,8 +1328,9 @@ export function createMcpServer(
       ...toolWidgetDescriptorMeta(config, "write"),
       annotations: WRITE_TOOL_ANNOTATIONS,
     },
-    async ({ workspaceId, ...input }) => {
+    async ({ workspaceId, ...input }, extra) => {
       const startedAt = performance.now();
+      await sendToolProgress(extra, { progress: 1, total: 2, message: `Writing ${input.path}` });
       const workspace = workspaces.getWorkspace(workspaceId);
       workspaces.resolvePath(workspace, input.path);
       const response = await writeFileTool(input, {
@@ -1105,6 +1361,7 @@ export function createMcpServer(
         success: true,
         durationMs: Math.round(performance.now() - startedAt),
       });
+      await sendToolProgress(extra, { progress: 2, total: 2, message: "Write complete" });
 
       return {
         ...response,
@@ -1160,8 +1417,9 @@ export function createMcpServer(
       ...toolWidgetDescriptorMeta(config, "edit"),
       annotations: EDIT_TOOL_ANNOTATIONS,
     },
-    async ({ workspaceId, ...input }) => {
+    async ({ workspaceId, ...input }, extra) => {
       const startedAt = performance.now();
+      await sendToolProgress(extra, { progress: 1, total: 2, message: `Editing ${input.path}` });
       const workspace = workspaces.getWorkspace(workspaceId);
       workspaces.resolvePath(workspace, input.path);
       const response = await editFileTool(input, {
@@ -1194,6 +1452,7 @@ export function createMcpServer(
         success: true,
         durationMs: Math.round(performance.now() - startedAt),
       });
+      await sendToolProgress(extra, { progress: 2, total: 2, message: "Edit complete" });
 
       return {
         content: editContent,
@@ -1248,8 +1507,9 @@ export function createMcpServer(
         ...toolWidgetDescriptorMeta(config, "edit"),
         annotations: EDIT_TOOL_ANNOTATIONS,
       },
-      async ({ workspaceId, patch }) => {
+      async ({ workspaceId, patch }, extra) => {
         const startedAt = performance.now();
+        await sendToolProgress(extra, { progress: 1, total: 2, message: "Applying patch" });
         const workspace = workspaces.getWorkspace(workspaceId);
         const applied = await applyPatch(workspace.root, patch);
         const paths = applied.files.map((file) => file.path).join(", ");
@@ -1265,6 +1525,7 @@ export function createMcpServer(
           success: true,
           durationMs: Math.round(performance.now() - startedAt),
         });
+        await sendToolProgress(extra, { progress: 2, total: 2, message: "Patch applied" });
 
         return {
           content,
@@ -1293,7 +1554,7 @@ export function createMcpServer(
     );
   }
 
-  if (config.widgets === "changes") {
+  if (config.widgets !== "full") {
     registerAppTool(
       server,
       "show_changes",
@@ -1305,43 +1566,79 @@ export function createMcpServer(
           workspaceId: z
             .string()
             .describe(workspaceIdDescription),
+          since: z
+            .enum(["last_shown", "workspace_open"])
+            .optional()
+            .describe("Checkpoint to compare from. Defaults to last_shown."),
+          markReviewed: z
+            .boolean()
+            .optional()
+            .describe("Advance the last-shown checkpoint. Defaults to true."),
         },
         outputSchema: resultOutputSchema(),
         ...toolWidgetDescriptorMeta(config, "show_changes"),
         annotations: { readOnlyHint: true },
       },
-      async ({ workspaceId }) => {
+      async ({ workspaceId, since, markReviewed }, extra) => {
         const startedAt = performance.now();
+        await sendToolProgress(extra, {
+          progress: 1,
+          total: 3,
+          message: "Collecting workspace changes",
+        });
         const workspace = workspaces.getWorkspace(workspaceId);
         const review = await reviewCheckpoints.reviewChanges({
           workspaceId,
           root: workspace.root,
-          markReviewed: true,
+          since: since ?? "last_shown",
+          markReviewed: markReviewed ?? true,
+          includePatch: config.widgets === "off",
         });
 
-        const content = [textBlock(review.result)];
+        const content = [textBlock(reviewResultText(review))];
+        await sendToolProgress(extra, {
+          progress: 2,
+          total: 3,
+          message: config.widgets === "off" ? "Formatting diff text" : "Preparing review card",
+        });
         logToolCall(config, {
           tool: "show_changes",
           workspaceId,
           success: true,
           durationMs: Math.round(performance.now() - startedAt),
         });
+        await sendToolProgress(extra, {
+          progress: 3,
+          total: 3,
+          message: "Changes ready",
+        });
+
+        const result = {
+          content,
+          structuredContent: {
+            result: contentText(content),
+          },
+        };
+
+        if (config.widgets === "off") return result;
 
         return {
-          content,
+          ...result,
           _meta: {
             tool: "show_changes",
             card: {
               workspaceId,
               summary: review.summary,
               files: review.files,
-              payload: {
-                patch: review.patch,
-              },
+              payload: review.patchId
+                ? {
+                    reviewPayloadUrl: new URL(
+                      `/review-payloads/${review.patchId}`,
+                      config.publicBaseUrl,
+                    ).toString(),
+                  }
+                : undefined,
             },
-          },
-          structuredContent: {
-            result: contentText(content),
           },
         };
       },
@@ -1373,8 +1670,13 @@ export function createMcpServer(
         ...toolWidgetDescriptorMeta(config, "search"),
         annotations: { readOnlyHint: true },
       },
-      async ({ workspaceId, ...input }) => {
+      async ({ workspaceId, ...input }, extra) => {
         const startedAt = performance.now();
+        await sendToolProgress(extra, {
+          progress: 1,
+          total: 2,
+          message: `Searching ${input.path ?? "."}`,
+        });
         const workspace = workspaces.getWorkspace(workspaceId);
         if (input.path) workspaces.resolvePath(workspace, input.path);
         const response = await grepFilesTool(input, {
@@ -1403,6 +1705,7 @@ export function createMcpServer(
           success: true,
           durationMs: Math.round(performance.now() - startedAt),
         });
+        await sendToolProgress(extra, { progress: 2, total: 2, message: "Search complete" });
 
         return {
           ...response,
@@ -1443,8 +1746,13 @@ export function createMcpServer(
         ...toolWidgetDescriptorMeta(config, "search"),
         annotations: { readOnlyHint: true },
       },
-      async ({ workspaceId, ...input }) => {
+      async ({ workspaceId, ...input }, extra) => {
         const startedAt = performance.now();
+        await sendToolProgress(extra, {
+          progress: 1,
+          total: 2,
+          message: `Finding files in ${input.path ?? "."}`,
+        });
         const workspace = workspaces.getWorkspace(workspaceId);
         if (input.path) workspaces.resolvePath(workspace, input.path);
         const response = await findFilesTool(input, {
@@ -1473,6 +1781,7 @@ export function createMcpServer(
           success: true,
           durationMs: Math.round(performance.now() - startedAt),
         });
+        await sendToolProgress(extra, { progress: 2, total: 2, message: "Find files complete" });
 
         return {
           ...response,
@@ -1513,8 +1822,9 @@ export function createMcpServer(
         ...toolWidgetDescriptorMeta(config, "directory"),
         annotations: { readOnlyHint: true },
       },
-      async ({ workspaceId, ...input }) => {
+      async ({ workspaceId, ...input }, extra) => {
         const startedAt = performance.now();
+        await sendToolProgress(extra, { progress: 1, total: 2, message: `Listing ${input.path}` });
         const workspace = workspaces.getWorkspace(workspaceId);
         workspaces.resolvePath(workspace, input.path);
         const response = await listDirectoryTool(input, {
@@ -1539,6 +1849,7 @@ export function createMcpServer(
           success: true,
           durationMs: Math.round(performance.now() - startedAt),
         });
+        await sendToolProgress(extra, { progress: 2, total: 2, message: "List directory complete" });
 
         return {
           ...response,
@@ -1594,8 +1905,9 @@ export function createMcpServer(
       ...toolWidgetDescriptorMeta(config, "shell"),
       annotations: SHELL_TOOL_ANNOTATIONS,
     },
-    async ({ workspaceId, workingDirectory, ...input }) => {
+    async ({ workspaceId, workingDirectory, ...input }, extra) => {
       const startedAt = performance.now();
+      await sendToolProgress(extra, { progress: 1, total: 2, message: "Running shell command" });
       const workspace = workspaces.getWorkspace(workspaceId);
       const cwd = workspaces.resolveWorkingDirectory(
         workspace,
@@ -1631,6 +1943,7 @@ export function createMcpServer(
         success: true,
         durationMs: Math.round(performance.now() - startedAt),
       });
+      await sendToolProgress(extra, { progress: 2, total: 2, message: "Shell command complete" });
 
       return {
         ...response,
@@ -1668,6 +1981,7 @@ export function createMcpServer(
 
 export interface CreateServerOptions {
   incomingArtifactAdapters?: readonly IncomingArtifactAdapter[];
+  notebookLmAuthRefreshManager?: NotebookLmAuthRefreshManager;
 }
 
 export function createServer(
@@ -1696,6 +2010,8 @@ export function createServer(
   const workspaces = new WorkspaceRegistry(config, workspaceStore);
   const reviewCheckpoints = createReviewCheckpointManager();
   const processSessions = new ProcessSessionManager();
+  const notebookLmAuthRefreshManager = options.notebookLmAuthRefreshManager
+    ?? createNotebookLmAuthRefreshManager({ statePath: defaultNotebookLmBrowserStatePath() });
   const localAgentProviders = config.subagents
     ? getLocalAgentProviderAvailabilitySnapshot()
     : [];
@@ -1732,8 +2048,10 @@ export function createServer(
   sessionCleanupTimer.unref();
 
   if (config.logging.trustProxy) {
-    app.set("trust proxy", true);
+    app.set("trust proxy", 1);
   }
+
+  app.use(createCloudflareAccessMiddleware(config.cloudflareAccess, config.logging));
 
   app.use((req, res, next) => {
     const requestId = randomUUID();
@@ -1743,7 +2061,10 @@ export function createServer(
     res.on("finish", () => {
       const path = requestPath(req);
       if (!config.logging.requests) return;
-      if (!config.logging.assets && path.startsWith("/mcp-app-assets")) return;
+      if (
+        !config.logging.assets
+        && (path.startsWith("/mcp-app-assets") || path.startsWith("/assets"))
+      ) return;
 
       logEvent(config.logging, "info", "http_request", {
         requestId,
@@ -1756,6 +2077,23 @@ export function createServer(
     });
 
     next();
+  });
+
+  app.get("/.well-known/openid-configuration", (_req, res) => {
+    res.setHeader("Access-Control-Allow-Origin", "*");
+    res.json({
+      issuer: new URL(config.publicBaseUrl).href,
+      authorization_endpoint: new URL("/authorize", config.publicBaseUrl).href,
+      response_types_supported: ["code"],
+      code_challenge_methods_supported: ["S256"],
+      token_endpoint: new URL("/token", config.publicBaseUrl).href,
+      token_endpoint_auth_methods_supported: ["client_secret_post", "none"],
+      grant_types_supported: ["authorization_code", "refresh_token"],
+      scopes_supported: config.oauth.scopes,
+      revocation_endpoint: new URL("/revoke", config.publicBaseUrl).href,
+      revocation_endpoint_auth_methods_supported: ["client_secret_post"],
+      registration_endpoint: new URL("/register", config.publicBaseUrl).href,
+    });
   });
 
   app.use(
@@ -1784,9 +2122,41 @@ export function createServer(
     }),
   );
 
+  app.options("/assets/{*asset}", (_req, res) => {
+    setAssetHeaders(res);
+    res.sendStatus(204);
+  });
+
+  app.use(
+    "/assets",
+    express.static(uiAssetsDirectory(), {
+      immutable: true,
+      maxAge: "1y",
+      fallthrough: false,
+      setHeaders: setAssetHeaders,
+    }),
+  );
+
   app.get("/healthz", (_req, res) => {
     res.json({ ok: true, name: "devspace" });
   });
+
+  app.options("/review-payloads/:id", (_req, res) => {
+    setAssetHeaders(res);
+    res.sendStatus(204);
+  });
+
+  app.get("/review-payloads/:id", async (req, res) => {
+    setAssetHeaders(res);
+    const patch = await reviewCheckpoints.readReviewPatch(req.params.id);
+    if (patch === undefined) {
+      res.status(404).json({ ok: false, error: "review payload not found" });
+      return;
+    }
+    res.json({ ok: true, patch });
+  });
+
+  registerNotebookLmAuthRefreshRoutes(app, config, notebookLmAuthRefreshManager);
 
   app.all("/mcp", async (req, res) => {
     const requestId = res.locals.requestId as string | undefined;

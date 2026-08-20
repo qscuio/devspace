@@ -140,7 +140,47 @@ DevSpace gives ChatGPT tools to:
 - use isolated Git worktrees for parallel coding sessions
 - follow project instructions from `AGENTS.md` and `CLAUDE.md`
 - discover local agent skills from your skill folders
-- show tool cards and optional change summaries in ChatGPT Apps-compatible hosts
+- ask and manage user-provided NotebookLM notebooks through high-level
+  `notebooklm` actions
+- search, read, capture, sync, and summarize AI history into qnote through
+  `qnote` actions
+- show plain Markdown diffs with ChatGPT-native syntax highlighting
+- optionally show DevSpace tool cards in ChatGPT Apps-compatible hosts
+
+## NotebookLM Tools
+
+NotebookLM support is enabled by default. DevSpace exposes one compact
+`notebooklm` tool by default to stay within ChatGPT's connector metadata
+budget. Use its `action` argument for:
+
+- `status`
+- `discover`
+- `library`
+- `research`
+
+You can ask by exact notebook URL even before discovery has imported that
+notebook. DevSpace keeps a local NotebookLM library and session registry under
+its state directory so repeated follow-up questions can reuse and refresh the
+same upstream NotebookLM session.
+
+Discovery is best-effort because NotebookLM does not provide a stable public
+notebook-list API. If discovery cannot see a notebook, use its NotebookLM URL
+directly with the `notebooklm` `research` action.
+
+Set `DEVSPACE_EXTRA_TOOL_MODE=split` if your MCP client works better with
+separate tools such as `notebooklm_research`, `qnote_search`, and
+`qnote_history`. The default `compact` mode is recommended for ChatGPT because
+it reduces connector metadata size.
+
+## Tool Cards
+
+DevSpace defaults to plain text results with `DEVSPACE_WIDGETS=off`. This keeps
+mobile and desktop ChatGPT sessions from waiting on custom iframe cards. Diffs
+from `show_changes` are returned as fenced `diff` blocks so ChatGPT can use its
+native syntax highlighting.
+
+Set `DEVSPACE_WIDGETS=changes` or `DEVSPACE_WIDGETS=full` only if you want
+DevSpace's custom Apps UI cards.
 
 ## Mental Model
 

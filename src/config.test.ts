@@ -12,7 +12,7 @@ const baseEnv = {
   DEVSPACE_OAUTH_OWNER_TOKEN: "test-owner-token-that-is-long-enough",
 };
 
-assert.equal(loadConfig(baseEnv).widgets, "full");
+assert.equal(loadConfig(baseEnv).widgets, "off");
 assert.equal(loadConfig({ ...baseEnv, DEVSPACE_WIDGETS: "changes" }).widgets, "changes");
 assert.equal(loadConfig({ ...baseEnv, DEVSPACE_WIDGETS: "full" }).widgets, "full");
 assert.equal(loadConfig({ ...baseEnv, DEVSPACE_WIDGETS: "off" }).widgets, "off");
@@ -22,6 +22,8 @@ assert.equal(loadConfig({ ...baseEnv, DEVSPACE_TOOL_MODE: "full" }).toolMode, "f
 assert.equal(loadConfig({ ...baseEnv, DEVSPACE_TOOL_MODE: "codex" }).toolMode, "codex");
 assert.equal(loadConfig({ ...baseEnv, DEVSPACE_MINIMAL_TOOLS: "0" }).toolMode, "full");
 assert.equal(loadConfig({ ...baseEnv, DEVSPACE_MINIMAL_TOOLS: "1" }).toolMode, "minimal");
+assert.equal(loadConfig(baseEnv).extraToolMode, "compact");
+assert.equal(loadConfig({ ...baseEnv, DEVSPACE_EXTRA_TOOL_MODE: "split" }).extraToolMode, "split");
 assert.equal(loadConfig(baseEnv).skillsEnabled, true);
 assert.equal(loadConfig(baseEnv).devspaceSkillsDir, join(emptyConfigDir, "skills"));
 assert.equal(loadConfig(baseEnv).devspaceAgentsDir, join(emptyConfigDir, "agents"));
@@ -35,6 +37,45 @@ assert.equal(
 );
 assert.equal(loadConfig({ ...baseEnv, DEVSPACE_SKILLS: "0" }).skillsEnabled, false);
 assert.equal(loadConfig({ ...baseEnv, DEVSPACE_SKILLS: "1" }).skillsEnabled, true);
+assert.equal(loadConfig(baseEnv).notebooklm.enabled, true);
+assert.equal(loadConfig(baseEnv).notebooklm.command, "npx");
+assert.deepEqual(loadConfig(baseEnv).notebooklm.args, [
+  "-y",
+  "-p",
+  "notebooklm-mcp@1.2.1",
+  "-p",
+  "@modelcontextprotocol/sdk@1.28.0",
+  "notebooklm-mcp",
+]);
+assert.equal(loadConfig(baseEnv).notebooklm.rawTools, false);
+assert.equal(loadConfig(baseEnv).notebooklm.sessionTtlSeconds, 900);
+assert.match(loadConfig(baseEnv).notebooklm.dataDir, /notebooklm$/);
+assert.equal(loadConfig({ ...baseEnv, DEVSPACE_NOTEBOOKLM: "0" }).notebooklm.enabled, false);
+assert.equal(loadConfig({ ...baseEnv, DEVSPACE_NOTEBOOKLM_COMMAND: "node" }).notebooklm.command, "node");
+assert.deepEqual(
+  loadConfig({ ...baseEnv, DEVSPACE_NOTEBOOKLM_ARGS: "server.js,--stdio" }).notebooklm.args,
+  ["server.js", "--stdio"],
+);
+assert.equal(loadConfig({ ...baseEnv, DEVSPACE_NOTEBOOKLM_RAW_TOOLS: "1" }).notebooklm.rawTools, true);
+assert.equal(
+  loadConfig({ ...baseEnv, DEVSPACE_NOTEBOOKLM_DATA_DIR: "C:\\tmp\\notebooklm-data" }).notebooklm.dataDir,
+  "C:\\tmp\\notebooklm-data",
+);
+assert.equal(loadConfig(baseEnv).qnote.enabled, true);
+assert.match(loadConfig(baseEnv).qnote.dir, /qnote$/);
+assert.equal(loadConfig(baseEnv).qnote.repoUrl, "git@github.com:qscuio/qnote.git");
+assert.equal(loadConfig(baseEnv).qnote.branch, "main");
+assert.equal(loadConfig(baseEnv).qnote.autoPush, true);
+assert.ok(loadConfig(baseEnv).qnote.allowedDirs.includes("knowledge"));
+assert.ok(loadConfig(baseEnv).qnote.allowedDirs.includes("skills"));
+assert.equal(loadConfig({ ...baseEnv, DEVSPACE_QNOTE: "0" }).qnote.enabled, false);
+assert.equal(loadConfig({ ...baseEnv, DEVSPACE_QNOTE_DIR: "C:\\tmp\\qnote" }).qnote.dir, "C:\\tmp\\qnote");
+assert.equal(loadConfig({ ...baseEnv, DEVSPACE_QNOTE_BRANCH: "notes" }).qnote.branch, "notes");
+assert.equal(loadConfig({ ...baseEnv, DEVSPACE_QNOTE_AUTO_PUSH: "0" }).qnote.autoPush, false);
+assert.deepEqual(
+  loadConfig({ ...baseEnv, DEVSPACE_QNOTE_ALLOWED_DIRS: "knowledge,skills" }).qnote.allowedDirs,
+  ["knowledge", "skills"],
+);
 assert.equal(
   loadConfig({ ...baseEnv, DEVSPACE_SUBAGENTS: "1" }).subagents,
   true,
@@ -66,6 +107,14 @@ assert.throws(
 assert.throws(
   () => loadConfig({ ...baseEnv, DEVSPACE_TOOL_MODE: "invalid" }),
   /Invalid DEVSPACE_TOOL_MODE: invalid/,
+);
+assert.throws(
+  () => loadConfig({ ...baseEnv, DEVSPACE_EXTRA_TOOL_MODE: "invalid" }),
+  /Invalid DEVSPACE_EXTRA_TOOL_MODE: invalid/,
+);
+assert.throws(
+  () => loadConfig({ ...baseEnv, DEVSPACE_NOTEBOOKLM_SESSION_TTL_SECONDS: "0" }),
+  /Invalid DEVSPACE_NOTEBOOKLM_SESSION_TTL_SECONDS: 0/,
 );
 
 assert.deepEqual(loadConfig(baseEnv).logging, {
@@ -169,32 +218,92 @@ assert.deepEqual(
 const configDir = mkdtempSync(join(tmpdir(), "devspace-config-test-"));
 writeFileSync(
   join(configDir, "config.json"),
-  JSON.stringify({
+  `\uFEFF${JSON.stringify({
     port: 8787,
     allowedRoots: [process.cwd()],
     publicBaseUrl: "https://devspace.example.com",
+    skillsEnabled: false,
+    toolMode: "full",
+    extraToolMode: "split",
+    widgets: "changes",
     subagents: true,
     artifactsEnabled: true,
     artifactMaxFileBytes: 321,
-  }),
+    notebooklm: {
+      enabled: false,
+      command: "node",
+      args: ["local-notebooklm.js"],
+      rawTools: true,
+      dataDir: "C:\\tmp\\persisted-notebooklm",
+      sessionTtlSeconds: 120,
+    },
+    qnote: {
+      enabled: false,
+      dir: "C:\\tmp\\persisted-qnote",
+      repoUrl: "git@example.com:me/qnote.git",
+      branch: "notes",
+      autoPush: false,
+      allowedDirs: ["knowledge", "skills"],
+    },
+  })}`,
 );
 writeFileSync(
   join(configDir, "auth.json"),
-  JSON.stringify({
+  `\uFEFF${JSON.stringify({
     ownerToken: "persisted-owner-token-long-enough",
-  }),
+  })}`,
 );
 
 const fileConfig = loadConfig({ DEVSPACE_CONFIG_DIR: configDir });
 assert.equal(fileConfig.port, 8787);
 assert.equal(fileConfig.oauth.ownerToken, "persisted-owner-token-long-enough");
 assert.equal(fileConfig.publicBaseUrl, "https://devspace.example.com");
+assert.equal(fileConfig.skillsEnabled, false);
+assert.equal(fileConfig.toolMode, "full");
+assert.equal(fileConfig.extraToolMode, "split");
+assert.equal(fileConfig.widgets, "changes");
 assert.equal(fileConfig.subagents, true);
 assert.equal(fileConfig.artifactsEnabled, true);
 assert.equal(fileConfig.artifactMaxFileBytes, 321);
+assert.deepEqual(fileConfig.notebooklm, {
+  enabled: false,
+  command: "node",
+  args: ["local-notebooklm.js"],
+  rawTools: true,
+  dataDir: "C:\\tmp\\persisted-notebooklm",
+  sessionTtlSeconds: 120,
+});
+assert.deepEqual(fileConfig.qnote, {
+  enabled: false,
+  dir: "C:\\tmp\\persisted-qnote",
+  repoUrl: "git@example.com:me/qnote.git",
+  branch: "notes",
+  autoPush: false,
+  allowedDirs: ["knowledge", "skills"],
+});
+assert.equal(fileConfig.cloudflareAccess.enabled, false);
 assert.deepEqual(fileConfig.allowedHosts, [
   "localhost",
   "127.0.0.1",
   "::1",
   "devspace.example.com",
 ]);
+
+const accessConfig = loadConfig({
+  ...baseEnv,
+  DEVSPACE_CLOUDFLARE_ACCESS: "1",
+  DEVSPACE_CLOUDFLARE_ACCESS_TEAM_DOMAIN: "https://example.cloudflareaccess.com/",
+  DEVSPACE_CLOUDFLARE_ACCESS_AUD: "aud-one,aud-two",
+  DEVSPACE_CLOUDFLARE_ACCESS_ALLOWED_EMAILS: "qscuio@gmail.com",
+}).cloudflareAccess;
+assert.deepEqual(accessConfig, {
+  enabled: true,
+  teamDomain: "example.cloudflareaccess.com",
+  audience: ["aud-one", "aud-two"],
+  allowedEmails: ["qscuio@gmail.com"],
+});
+
+assert.throws(
+  () => loadConfig({ ...baseEnv, DEVSPACE_CLOUDFLARE_ACCESS: "1" }),
+  /DEVSPACE_CLOUDFLARE_ACCESS_TEAM_DOMAIN is required/,
+);

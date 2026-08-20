@@ -77,6 +77,53 @@ Prefer adding Cloudflare Access, Tailscale identity controls, or equivalent
 protection in front of public tunnels. DevSpace OAuth still protects the MCP
 endpoint, but the tunnel URL should not be treated as a secret.
 
+## Cloudflare Access
+
+For Cloudflare Tunnel deployments, create a Cloudflare Access self-hosted
+application for your DevSpace hostname before exposing the route publicly.
+Cloudflare Access is deny-by-default, so users must match an Allow policy before
+Cloudflare forwards traffic to DevSpace.
+
+DevSpace can also verify the Cloudflare Access JWT at the origin:
+
+```bash
+DEVSPACE_CLOUDFLARE_ACCESS=1 \
+DEVSPACE_CLOUDFLARE_ACCESS_TEAM_DOMAIN="team.cloudflareaccess.com" \
+DEVSPACE_CLOUDFLARE_ACCESS_AUD="your-application-aud" \
+npx @waishnav/devspace serve
+```
+
+Add `DEVSPACE_CLOUDFLARE_ACCESS_ALLOWED_EMAILS` if you want DevSpace to enforce
+specific user emails in addition to the Cloudflare policy.
+
+This does not replace DevSpace OAuth. Use both layers: Cloudflare Access decides
+who can reach the public hostname, and the DevSpace Owner password approves the
+MCP client session.
+
+## NotebookLM
+
+NotebookLM tools are enabled by default and run through the upstream
+`notebooklm-mcp` browser automation package. That package stores Google browser
+state on the host running DevSpace, so treat a VPS deployment as holding a
+logged-in browser profile. Use a dedicated Google account when possible, protect
+the public hostname with Cloudflare Access plus DevSpace OAuth, and set
+`DEVSPACE_NOTEBOOKLM=0` if you do not want NotebookLM exposed from a deployment.
+
+By default, DevSpace keeps NotebookLM library metadata, reusable session
+references, and upstream profile data under `<DEVSPACE_STATE_DIR>/notebooklm`.
+You can move that state with `DEVSPACE_NOTEBOOKLM_DATA_DIR`. Keep the directory
+private to the server user and do not place it in a shared project checkout.
+
+The default NotebookLM tools are the high-level `notebooklm_status`,
+`notebooklm_discover`, `notebooklm_library`, and `notebooklm_research` tools.
+They can write local metadata and session state even when the underlying
+NotebookLM notebook is only being read. Raw upstream tools are hidden unless
+`DEVSPACE_NOTEBOOKLM_RAW_TOOLS=1` is set for debugging.
+
+If Google authentication becomes stale, use `notebooklm_status` to get the
+repair hint. Session reuse is automatic, but stale browser profiles may still
+need a visible browser login on the host running DevSpace.
+
 ## Shell Access
 
 The shell tool is powerful by design. It is meant for tests, builds, git, and

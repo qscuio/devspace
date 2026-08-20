@@ -7,6 +7,7 @@ import {
   isPatchTool,
   isShellTool,
   isToolName,
+  progressDetailLabel,
 } from "./card-types.js";
 
 test("the supported coding tools are recognized as card tools", () => {
@@ -57,14 +58,21 @@ test("a multi-file patch stays collapsed", () => {
   );
 });
 
-test("show changes still opens immediately", () => {
+test("show changes stays collapsed until details are requested", () => {
   assert.equal(
     isInitiallyExpandedCard({
       tool: "show_changes",
       files: [{ path: "src/a.ts", type: "change" }],
       payload: { patch: "diff --git a/src/a.ts b/src/a.ts" },
     }),
-    true,
+    false,
+  );
+});
+
+test("Codex process progress shows the command", () => {
+  assert.equal(
+    progressDetailLabel("exec_command", { cmd: "npm test" }),
+    "npm test",
   );
 });
 

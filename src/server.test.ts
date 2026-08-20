@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { createServer as createHttpServer } from "node:http";
+import type { AddressInfo } from "node:net";
+import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test, { type TestContext } from "node:test";
@@ -11,7 +13,8 @@ import { loadConfig, type ServerConfig } from "./config.js";
 import type { LocalAgentProviderAvailability } from "./local-agent-availability.js";
 import { createReviewCheckpointManager } from "./review-checkpoints.js";
 import { ProcessSessionManager } from "./process-sessions.js";
-import { createMcpServer } from "./server.js";
+import { createNotebookLmAuthRefreshManager } from "./notebooklm-auth-refresh.js";
+import { createMcpServer, createServer } from "./server.js";
 import { SqliteWorkspaceStore } from "./workspace-store.js";
 import { WorkspaceRegistry } from "./workspaces.js";
 
@@ -180,6 +183,78 @@ test("checkout reuse and context suppression survive a registry restart", async 
     assert.equal(structuredContent(restored).agentsFiles, undefined);
   } finally {
     await closeRestored();
+  }
+});
+
+test("HTTP routes preserve compatibility and accept one-time NotebookLM auth refresh", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "devspace-http-server-test-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const config = loadConfig({
+    DEVSPACE_CONFIG_DIR: join(root, "config"),
+    DEVSPACE_STATE_DIR: join(root, "state"),
+    DEVSPACE_ALLOWED_ROOTS: root,
+    DEVSPACE_OAUTH_OWNER_TOKEN: "test-owner-token-that-is-long-enough",
+    DEVSPACE_TRUST_PROXY: "1",
+  });
+  const authRefreshStatePath = join(root, "notebooklm-state", "state.json");
+  const authRefreshManager = createNotebookLmAuthRefreshManager({
+    statePath: authRefreshStatePath,
+    tokenTtlMs: 60_000,
+    now: () => new Date("2026-06-20T00:00:00.000Z"),
+  });
+  const running = createServer(config, {
+    notebookLmAuthRefreshManager: authRefreshManager,
+  });
+  assert.equal(running.app.get("trust proxy"), 1);
+
+  const manifest = JSON.parse(
+    await readFile(new URL("../dist/ui/.vite/manifest.json", import.meta.url), "utf8"),
+  ) as Record<string, { file?: string }>;
+  const appEntry = manifest["workspace-app.html"];
+  assert.ok(appEntry?.file);
+
+  const httpServer = createHttpServer(running.app);
+  await new Promise<void>((resolve) => httpServer.listen(0, "127.0.0.1", resolve));
+
+  try {
+    const address = httpServer.address();
+    assert.ok(address && typeof address === "object");
+    const baseUrl = `http://127.0.0.1:${(address as AddressInfo).port}`;
+
+    const legacyAssetResponse = await fetch(`${baseUrl}/${appEntry.file}`);
+    assert.equal(legacyAssetResponse.status, 200);
+    assert.equal(legacyAssetResponse.headers.get("access-control-allow-origin"), "*");
+
+    const discoveryResponse = await fetch(`${baseUrl}/.well-known/openid-configuration`);
+    assert.equal(discoveryResponse.status, 200);
+    const discovery = await discoveryResponse.json() as Record<string, unknown>;
+    assert.equal(discovery.issuer, `${config.publicBaseUrl}/`);
+    assert.equal(discovery.authorization_endpoint, `${config.publicBaseUrl}/authorize`);
+    assert.equal(discovery.token_endpoint, `${config.publicBaseUrl}/token`);
+
+    const uploadToken = authRefreshManager.createUploadToken();
+    const uploadResponse = await fetch(`${baseUrl}/notebooklm/auth-refresh/upload`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        token: uploadToken.token,
+        state: {
+          cookies: [{ name: "SID", value: "secret", domain: ".google.com", path: "/" }],
+          origins: [{ origin: "https://notebooklm.google.com", localStorage: [] }],
+        },
+      }),
+    });
+    assert.equal(uploadResponse.status, 200);
+    assert.deepEqual(await uploadResponse.json(), { ok: true, cookies: 1, origins: 1 });
+    const savedState = JSON.parse(await readFile(authRefreshStatePath, "utf8")) as {
+      cookies: unknown[];
+    };
+    assert.equal(savedState.cookies.length, 1);
+  } finally {
+    await new Promise<void>((resolve, reject) => {
+      httpServer.close((error) => error ? reject(error) : resolve());
+    });
+    await running.close();
   }
 });
 

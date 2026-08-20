@@ -89,6 +89,21 @@ MCP clients discover metadata from:
 /.well-known/oauth-authorization-server
 ```
 
+## Cloudflare Access
+
+For public Cloudflare Tunnel deployments, put a Cloudflare Access self-hosted
+application in front of the public hostname. DevSpace can also verify the
+Access JWT at the origin as defense in depth:
+
+| Variable | Purpose |
+| --- | --- |
+| `DEVSPACE_CLOUDFLARE_ACCESS` | Set to `1` to require Cloudflare Access JWT verification. |
+| `DEVSPACE_CLOUDFLARE_ACCESS_TEAM_DOMAIN` | Access team domain, for example `team.cloudflareaccess.com`. |
+| `DEVSPACE_CLOUDFLARE_ACCESS_AUD` | Comma-separated Access application audience tags. |
+| `DEVSPACE_CLOUDFLARE_ACCESS_ALLOWED_EMAILS` | Optional comma-separated email allowlist applied after JWT verification. |
+
+Cloudflare Access does not replace DevSpace OAuth; both checks remain active.
+
 ## Tool Modes
 
 `DEVSPACE_TOOL_MODE` controls the tool surface.
@@ -102,7 +117,11 @@ MCP clients discover metadata from:
 `DEVSPACE_MINIMAL_TOOLS` remains a backward-compatible alias when
 `DEVSPACE_TOOL_MODE` is unset: `1` selects `minimal` and `0` selects `full`.
 The `codex` mode must be selected through `DEVSPACE_TOOL_MODE` and always uses
-its fixed short tool names regardless of `DEVSPACE_TOOL_NAMING`.
+its fixed short tool names.
+
+`DEVSPACE_EXTRA_TOOL_MODE` controls the optional NotebookLM and qnote surfaces.
+The default `compact` mode exposes one action-based tool per integration to
+reduce connector metadata. Set it to `split` for a separate tool per action.
 
 Codex-mode commands run without a PTY by default. Set `tty: true` on
 `exec_command` for interactive terminal programs. PTY support uses the optional
@@ -115,9 +134,9 @@ sessions.
 
 | Value | Behavior |
 | --- | --- |
-| `full` | Default. Widget UI is attached to exposed workspace, file, edit, and shell tools. |
+| `off` | Default. Uses native text results and avoids custom iframe startup. |
 | `changes` | Enables the aggregate `show_changes` tool and attaches widget UI to `open_workspace` and `show_changes`. |
-| `off` | Disables widget UI. |
+| `full` | Widget UI is attached to exposed workspace, file, edit, and shell tools. |
 
 ## Skills
 
@@ -167,6 +186,42 @@ DEVSPACE_SKILL_PATHS="$HOME/.claude/skills,$HOME/company/skills" \
 npx @waishnav/devspace serve
 ```
 
+## NotebookLM
+
+NotebookLM support is enabled by default. Its upstream stdio bridge starts
+lazily on the first NotebookLM request.
+
+| Variable | Default |
+| --- | --- |
+| `DEVSPACE_NOTEBOOKLM` | `1` |
+| `DEVSPACE_NOTEBOOKLM_COMMAND` | `npx` |
+| `DEVSPACE_NOTEBOOKLM_ARGS` | `-y,-p,notebooklm-mcp@1.2.1,-p,@modelcontextprotocol/sdk@1.28.0,notebooklm-mcp` |
+| `DEVSPACE_NOTEBOOKLM_RAW_TOOLS` | `0` |
+| `DEVSPACE_NOTEBOOKLM_DATA_DIR` | `<DEVSPACE_STATE_DIR>/notebooklm` |
+| `DEVSPACE_NOTEBOOKLM_SESSION_TTL_SECONDS` | `900` |
+
+The high-level actions cover status, discovery, library management, and
+research. Discovery is best-effort; an exact NotebookLM URL can always be
+passed directly to research. Keep the data directory private and stable because
+it contains local metadata, reusable sessions, and upstream browser state.
+
+## Qnote
+
+Qnote support is enabled by default and stores a private Git-backed knowledge
+tree under `<DEVSPACE_STATE_DIR>/qnote`.
+
+| Variable | Default |
+| --- | --- |
+| `DEVSPACE_QNOTE` | `1` |
+| `DEVSPACE_QNOTE_DIR` | `<DEVSPACE_STATE_DIR>/qnote` |
+| `DEVSPACE_QNOTE_REPO_URL` | `git@github.com:qscuio/qnote.git` |
+| `DEVSPACE_QNOTE_BRANCH` | `main` |
+| `DEVSPACE_QNOTE_AUTO_PUSH` | `1` |
+| `DEVSPACE_QNOTE_ALLOWED_DIRS` | Built-in knowledge and client-history directories. |
+
+Qnote refuses unsafe paths, dirty-checkout synchronization, and non-fast-forward
+updates. Capture stores the supplied summary; it does not read hidden chat state.
+
 ## Logging
 
 | Variable | Default |
@@ -193,7 +248,7 @@ DEVSPACE_PUBLIC_BASE_URL="https://devspace.example.com" \
 DEVSPACE_WORKTREE_ROOT="$HOME/.devspace/worktrees" \
 DEVSPACE_ARTIFACTS="1" \
 DEVSPACE_TOOL_MODE="minimal" \
-DEVSPACE_WIDGETS="full" \
+DEVSPACE_WIDGETS="off" \
 npx @waishnav/devspace serve
 ```
 

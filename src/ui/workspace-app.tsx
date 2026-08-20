@@ -12,10 +12,14 @@ import {
   isPatchTool,
   isReadTool,
   isReviewTool,
+  isSearchTool,
+  isShellTool,
   isToolName,
   isToolResultCard,
   isWriteTool,
   payloadText,
+  progressActionLabel,
+  progressDetailLabel,
   type HostContext,
   type ToolName,
   type ToolResultCard,
@@ -38,6 +42,24 @@ interface MountedPayload {
   unmount(): void;
 }
 
+type ToolProgressPhase = "preparing" | "running" | "cancelled";
+
+interface ToolProgressState {
+  phase: ToolProgressPhase;
+  tool?: ToolName;
+  args?: Record<string, unknown>;
+  reason?: string;
+  startedAt: number;
+}
+
+interface ToolInputParams {
+  arguments?: Record<string, unknown>;
+}
+
+interface ToolCancelledParams {
+  reason?: string;
+}
+
 let app: App | null = null;
 let connected = false;
 let connectionError: string | null = null;
@@ -50,6 +72,10 @@ let currentPayload: MountedPayload | null = null;
 let currentPayloadContainer: HTMLElement | null = null;
 let openWorkspaceInstructionKey: string | null = null;
 let showAvailableWorkspaceInstructions = false;
+let toolProgress: ToolProgressState | null = null;
+let progressTimer: number | null = null;
+
+const PROGRESS_REFRESH_MS = 1000;
 
 const maybeAppRoot = document.querySelector<HTMLElement>("#app");
 
@@ -69,7 +95,16 @@ async function boot(): Promise<void> {
     {},
   );
 
+  app.ontoolinputpartial = (params) => {
+    updateToolProgress("preparing", params as ToolInputParams);
+  };
+
+  app.ontoolinput = (params) => {
+    updateToolProgress("running", params as ToolInputParams);
+  };
+
   app.ontoolresult = (result) => {
+    clearToolProgress();
     const structuredContent = getStructuredContent<Partial<ToolResultCard>>(result);
     const metaCard = cardFromMeta(result);
     const structured = metaCard
@@ -103,13 +138,19 @@ async function boot(): Promise<void> {
       ...hostContext,
       ...ctx,
     };
+    refreshProgressToolFromHostContext();
     applyHostContext();
     // Workspace details inherit host variables directly. Rebuilding their DOM on
     // iframe resize would reset an in-progress instruction preview interaction.
     if (card?.tool !== "open_workspace") renderPayloadIfNeeded();
   };
 
+  app.ontoolcancelled = (params) => {
+    markToolProgressCancelled(params as ToolCancelledParams);
+  };
+
   app.onteardown = async () => {
+    clearToolProgress();
     unmountPayload();
     return {};
   };
@@ -154,6 +195,11 @@ function render(): void {
 
   if (!connected) {
     renderEmpty("Connecting to host...");
+    return;
+  }
+
+  if (toolProgress) {
+    renderToolProgress(toolProgress);
     return;
   }
 
@@ -224,6 +270,149 @@ function renderEmpty(message: string, tone: "muted" | "error" = "muted"): void {
   const main = element("main", { className: "shell" });
   main.append(element("section", { className: `empty ${tone}`, text: message }));
   appRoot.replaceChildren(main);
+}
+
+function renderToolProgress(progress: ToolProgressState): void {
+  const elapsedSeconds = Math.max(0, Math.floor((Date.now() - progress.startedAt) / 1000));
+  const main = element("main", { className: "shell" });
+  const section = element("section", {
+    className: `tool-card progress ${progress.phase === "cancelled" ? "cancelled" : progressTone(progress.tool)}`,
+  });
+  const header = element("div", { className: "tool-header progress-header" });
+  const icon = element("span", { className: "tool-icon", ariaHidden: "true" });
+  icon.append(renderIcon(progressIcon(progress.tool)));
+  const toolMain = element("span", { className: "tool-main" });
+  const title = element("span", {
+    className: "tool-title",
+    text: progress.phase === "cancelled" ? "Tool Cancelled" : progressActionLabel(progress.tool),
+  });
+  const labelText = progressDetailLabel(progress.tool, progress.args);
+  const label = element("span", { className: "tool-label", text: labelText, title: labelText });
+  const badge = element("span", {
+    className: "badge",
+    text: progress.phase === "cancelled" ? "cancelled" : `${elapsedSeconds}s`,
+  });
+  toolMain.append(title, label);
+  header.append(icon, toolMain, badge, element("span", { className: "chevron" }));
+
+  const body = element("div", { className: "progress-body" });
+  const lineText = progress.phase === "cancelled"
+    ? progress.reason ?? "The host cancelled this tool run."
+    : progress.phase === "preparing"
+      ? "Receiving tool input..."
+      : "Tool is running...";
+  body.append(
+    element("div", {
+      className: `progress-line ${progress.phase === "cancelled" ? "cancelled" : ""}`,
+      text: lineText,
+    }),
+    renderProgressBar(progress.phase),
+  );
+
+  section.append(header, body);
+  main.append(section);
+  appRoot.replaceChildren(main);
+}
+
+function progressTone(tool: ToolName | undefined): string {
+  if (!tool) return "running";
+  if (isReviewTool(tool)) return "review";
+  if (isShellTool(tool)) return "shell";
+  if (isSearchTool(tool)) return "search";
+  if (isReadTool(tool)) return "read";
+  if (isWriteTool(tool)) return "write";
+  if (isEditTool(tool) || isPatchTool(tool)) return "edit";
+  if (tool === "open_workspace") return "workspace";
+  return "running";
+}
+
+function progressIcon(tool: ToolName | undefined): ToolIcon {
+  if (!tool) return toolIcons.loading;
+  if (isReviewTool(tool) || isPatchTool(tool)) return toolIcons.diff;
+  if (isShellTool(tool)) return toolIcons.terminal;
+  if (isSearchTool(tool)) return toolIcons.search;
+  if (isReadTool(tool)) return toolIcons.readFile;
+  if (isWriteTool(tool)) return toolIcons.writeFile;
+  if (isEditTool(tool)) return toolIcons.editFile;
+  if (tool === "open_workspace") return toolIcons.folderOpen;
+  if (tool === "ls") return toolIcons.folderTree;
+  if (tool === "glob") return toolIcons.files;
+  return toolIcons.loading;
+}
+
+function renderProgressBar(phase: ToolProgressPhase): HTMLElement {
+  const bar = element("div", {
+    className: `progress-bar ${phase === "cancelled" ? "cancelled" : ""}`,
+    ariaHidden: "true",
+  });
+  bar.append(element("span"));
+  return bar;
+}
+
+function updateToolProgress(phase: ToolProgressPhase, params: ToolInputParams): void {
+  const now = Date.now();
+  toolProgress = {
+    phase,
+    tool: currentHostToolName() ?? toolProgress?.tool,
+    args: params.arguments ?? toolProgress?.args,
+    startedAt: toolProgress?.startedAt ?? now,
+  };
+  card = null;
+  expanded = false;
+  reviewFilesExpanded = false;
+  errorMessage = null;
+  startProgressTimer();
+  render();
+}
+
+function markToolProgressCancelled(params: ToolCancelledParams): void {
+  const now = Date.now();
+  toolProgress = {
+    phase: "cancelled",
+    tool: currentHostToolName() ?? toolProgress?.tool,
+    args: toolProgress?.args,
+    reason: params.reason,
+    startedAt: toolProgress?.startedAt ?? now,
+  };
+  card = null;
+  errorMessage = null;
+  stopProgressTimer();
+  render();
+}
+
+function refreshProgressToolFromHostContext(): void {
+  if (!toolProgress || toolProgress.tool) return;
+  const tool = currentHostToolName();
+  if (!tool) return;
+  toolProgress = { ...toolProgress, tool };
+  render();
+}
+
+function currentHostToolName(): ToolName | undefined {
+  const name = hostContext?.toolInfo?.tool?.name;
+  return isToolName(name) ? name : undefined;
+}
+
+function startProgressTimer(): void {
+  if (progressTimer !== null) return;
+  progressTimer = window.setInterval(() => {
+    if (!toolProgress || toolProgress.phase === "cancelled") {
+      stopProgressTimer();
+      return;
+    }
+    render();
+  }, PROGRESS_REFRESH_MS);
+}
+
+function stopProgressTimer(): void {
+  if (progressTimer === null) return;
+  window.clearInterval(progressTimer);
+  progressTimer = null;
+}
+
+function clearToolProgress(): void {
+  toolProgress = null;
+  stopProgressTimer();
 }
 
 async function renderPayloadIfNeeded(): Promise<void> {

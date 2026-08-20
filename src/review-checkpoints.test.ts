@@ -36,7 +36,17 @@ test("show_changes reports and advances the last-shown checkpoint", async (t) =>
   });
   assert.deepEqual(unreviewed.files.map((file) => file.path).sort(), ["README.md", "new.txt"]);
   assert.equal(unreviewed.summary.additions, 2);
-  assert.match(unreviewed.patch, /world/);
+  assert.match(unreviewed.patch ?? "", /world/);
+
+  const deferred = await manager.reviewChanges({
+    workspaceId: "ws_incremental",
+    root,
+    markReviewed: false,
+    includePatch: false,
+  });
+  assert.equal(deferred.patch, undefined);
+  assert.equal(typeof deferred.patchId, "string");
+  assert.match(await manager.readReviewPatch(deferred.patchId ?? "") ?? "", /world/);
 
   const markedReviewed = await manager.reviewChanges({
     workspaceId: "ws_incremental",
@@ -68,8 +78,8 @@ test("review checkpoints survive a manager restart", async (t) => {
     markReviewed: false,
   });
   assert.deepEqual(afterRestart.files.map((file) => file.path), ["later.txt"]);
-  assert.match(afterRestart.patch, /after restart/);
-  assert.doesNotMatch(afterRestart.patch, /world/);
+  assert.match(afterRestart.patch ?? "", /after restart/);
+  assert.doesNotMatch(afterRestart.patch ?? "", /world/);
 });
 
 test("concurrent initialization produces one usable checkpoint state", async (t) => {
@@ -109,7 +119,7 @@ test("a missing last-shown checkpoint falls back after restart and can be re-est
   });
   assert.equal(fallback.summary.files, 1);
   assert.match(fallback.result, /compared from workspace open/);
-  assert.match(fallback.patch, /changed/);
+  assert.match(fallback.patch ?? "", /changed/);
 
   const reestablished = await restartedManager.reviewChanges({
     workspaceId: "ws_missing_baseline",

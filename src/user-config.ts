@@ -7,6 +7,7 @@ import {
 } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
+import { parseJsonFile } from "./json-file.js";
 import { expandHomePath } from "./roots.js";
 
 export interface DevspaceUserConfig {
@@ -15,12 +16,38 @@ export interface DevspaceUserConfig {
   allowedRoots?: string[];
   publicBaseUrl?: string | null;
   allowedHosts?: string[];
+  skillsEnabled?: boolean;
+  toolMode?: "minimal" | "full" | "codex";
+  extraToolMode?: "compact" | "split";
+  widgets?: "off" | "changes" | "full";
   stateDir?: string;
   worktreeRoot?: string;
   artifactsEnabled?: boolean;
   artifactMaxFileBytes?: number;
   agentDir?: string;
   subagents?: boolean;
+  notebooklm?: {
+    enabled?: boolean;
+    command?: string;
+    args?: string[];
+    rawTools?: boolean;
+    dataDir?: string;
+    sessionTtlSeconds?: number;
+  };
+  qnote?: {
+    enabled?: boolean;
+    dir?: string;
+    repoUrl?: string;
+    branch?: string;
+    autoPush?: boolean;
+    allowedDirs?: string[];
+  };
+  cloudflareAccess?: {
+    enabled?: boolean;
+    teamDomain?: string;
+    audience?: string[];
+    allowedEmails?: string[];
+  };
 }
 
 export interface DevspaceAuthConfig {
@@ -118,12 +145,7 @@ export function resolveSubagentsFlag(
 }
 
 function readJsonFile<T>(filePath: string): T {
-  try {
-    return JSON.parse(readFileSync(filePath, "utf8")) as T;
-  } catch (error) {
-    const reason = error instanceof Error ? error.message : String(error);
-    throw new Error(`Unable to read ${filePath}: ${reason}`);
-  }
+  return parseJsonFile<T>(filePath);
 }
 
 function writeJsonFile(filePath: string, value: unknown, mode: number): void {

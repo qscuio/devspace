@@ -1,0 +1,508 @@
+import { readFile } from "node:fs/promises";
+import { join } from "node:path";
+import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
+import {
+  normalizeNotebookUrl,
+  type NotebookRecord,
+  type NotebookLmLibraryStore,
+} from "./notebooklm-library.js";
+import type { NotebookLmDiscoverer } from "./notebooklm-discovery.js";
+import type { NotebookLmSessionStore, NotebookSessionRecord } from "./notebooklm-sessions.js";
+import {
+  NotebookLmClientError,
+  type NotebookLmClient,
+  type NotebookLmMappedError,
+} from "./notebooklm.js";
+
+export interface NotebookLmWorkflowsDeps {
+  library: NotebookLmLibraryStore;
+  sessions: NotebookLmSessionStore;
+  client: NotebookLmClient;
+  dataDir: string;
+  discoverer?: NotebookLmDiscoverer;
+}
+
+export interface NotebookLmStatusInput {
+  verifyBrowser?: boolean;
+  verify_browser?: boolean;
+}
+
+export type NotebookLmWorkflowFailureStatus =
+  | NotebookLmMappedError["code"]
+  | "not_authenticated"
+  | "browser_failed"
+  | "upstream_unavailable";
+
+export interface NotebookLmRepairPlan {
+  code: string;
+  message: string;
+  repairHint: string;
+}
+
+export type NotebookLmStatusResponse =
+  | {
+    status: string;
+    authenticated: boolean;
+    knownNotebooks: number;
+    sessions: Awaited<ReturnType<NotebookLmSessionStore["stats"]>>;
+    dataDir: string;
+    repairPlan?: NotebookLmRepairPlan;
+  }
+  | {
+    status: NotebookLmWorkflowFailureStatus;
+    authenticated: false;
+    knownNotebooks: number;
+    sessions: Awaited<ReturnType<NotebookLmSessionStore["stats"]>>;
+    dataDir: string;
+    repairPlan: NotebookLmRepairPlan;
+  };
+
+export interface NotebookLmResearchInput {
+  question: string;
+  notebook?: string;
+  notebookId?: string;
+  notebook_id?: string;
+  notebookUrl?: string;
+  notebook_url?: string;
+  conversation?: string;
+  fresh_session?: boolean;
+  freshSession?: boolean;
+}
+
+export type NotebookLmResearchResponse =
+  | {
+    status: "ok";
+    notebook: NotebookRecord;
+    answer?: unknown;
+    result: CallToolResult;
+    sessionId?: string;
+    sessionRefreshed: boolean;
+  }
+  | { status: "ambiguous_notebook"; candidates: NotebookRecord[] }
+  | { status: "notebook_not_found"; candidates: NotebookRecord[] }
+  | {
+    status: NotebookLmWorkflowFailureStatus;
+    notebook?: NotebookRecord;
+    authenticated?: boolean;
+    repairPlan: NotebookLmRepairPlan;
+  };
+
+export interface NotebookLmLibraryInput {
+  action?: "list" | "search" | "clear_sessions";
+  query?: string;
+  notebook?: string;
+  notebookId?: string;
+  notebook_id?: string;
+  notebookUrl?: string;
+  notebook_url?: string;
+  conversation?: string;
+}
+
+export type NotebookLmLibraryResponse =
+  | { status: "ok"; action: "list"; notebooks: NotebookRecord[] }
+  | { status: "ok"; action: "search"; notebooks: NotebookRecord[] }
+  | { status: "ok"; action: "clear_sessions"; cleared: number }
+  | { status: "ambiguous_notebook"; candidates: NotebookRecord[] }
+  | { status: "notebook_not_found"; candidates: NotebookRecord[] };
+
+export interface NotebookLmDiscoverInput {
+  limit?: number;
+  tag?: string;
+}
+
+export type NotebookLmDiscoverResponse =
+  | { status: "ok"; imported: number; notebooks: NotebookRecord[] }
+  | { status: "browser_failed"; message: string; repairHint: string };
+
+export class NotebookLmWorkflows {
+  constructor(private readonly deps: NotebookLmWorkflowsDeps) {}
+
+  async status(input: NotebookLmStatusInput): Promise<NotebookLmStatusResponse> {
+    const [knownNotebooks, sessions] = await Promise.all([
+      this.deps.library.list().then((records) => records.length),
+      this.deps.sessions.stats(),
+    ]);
+
+    try {
+      const health = await this.deps.client.callTool("get_health", {
+        verify_browser: input.verifyBrowser ?? input.verify_browser ?? false,
+      });
+      const structured = structuredContent(health);
+      const authenticated = structured.authenticated === undefined
+        ? true
+        : Boolean(structured.authenticated);
+      const healthStatus = normalizeHealthStatus(structured.status, authenticated);
+      return {
+        status: healthStatus.status,
+        authenticated,
+        knownNotebooks,
+        sessions,
+        dataDir: this.deps.dataDir,
+        repairPlan: healthStatus.repairPlan,
+      };
+    } catch (error) {
+      const repairPlan = repairPlanFromError(error);
+      return {
+        status: repairPlan.code as NotebookLmWorkflowFailureStatus,
+        authenticated: false,
+        knownNotebooks,
+        sessions,
+        dataDir: this.deps.dataDir,
+        repairPlan,
+      };
+    }
+  }
+
+  async research(input: NotebookLmResearchInput): Promise<NotebookLmResearchResponse> {
+    let notebook: NotebookRecord;
+    try {
+      notebook = await this.resolveResearchNotebook(input);
+    } catch (error) {
+      if (error instanceof NotebookLmResolveError) return error.response;
+      throw error;
+    }
+    const health = await this.status({});
+    if (health.status !== "ok" || !health.authenticated) {
+      return {
+        status: health.status as NotebookLmWorkflowFailureStatus,
+        notebook,
+        authenticated: health.authenticated,
+        repairPlan: health.repairPlan ?? {
+          code: "not_authenticated",
+          message: "NotebookLM is not authenticated.",
+          repairHint: "Run notebooklm_status or notebooklm_setup_auth with a visible browser.",
+        },
+      };
+    }
+
+    const conversation = input.conversation;
+    const freshSession = input.fresh_session ?? input.freshSession ?? false;
+    const reusable = freshSession
+      ? undefined
+      : await this.getReusableSession({
+        notebookId: notebook.id,
+        notebookUrl: notebook.url,
+        conversation,
+      });
+    const sessionId = reusable?.upstreamSessionId;
+
+    try {
+      return await this.askAndSave({ input, notebook, sessionId });
+    } catch (error) {
+      if (sessionId && isSessionRelatedError(error)) {
+        try {
+          return await this.askAndSave({ input, notebook });
+        } catch (retryError) {
+          return failureResponseFromError(retryError, notebook);
+        }
+      }
+      return failureResponseFromError(error, notebook);
+    }
+  }
+
+  private async resolveResearchNotebook(input: NotebookLmResearchInput): Promise<NotebookRecord> {
+    const notebookUrl = input.notebookUrl ?? input.notebook_url;
+    if (notebookUrl) {
+      const url = normalizeNotebookUrl(notebookUrl);
+      const id = notebookIdFromUrl(url);
+      return this.deps.library.upsert({
+        url,
+        name: `Notebook ${id}`,
+        aliases: [id],
+        description: "",
+        topics: [],
+        tags: [],
+        source: "manual",
+      });
+    }
+
+    const resolved = await this.deps.library.resolve({
+      notebook: input.notebook,
+      notebookId: input.notebookId ?? input.notebook_id,
+    });
+    if (resolved.status === "ambiguous") {
+      throw new NotebookLmResolveError({ status: "ambiguous_notebook", candidates: resolved.candidates });
+    }
+    if (resolved.status === "not_found") {
+      throw new NotebookLmResolveError({ status: "notebook_not_found", candidates: resolved.candidates });
+    }
+    return resolved.notebook;
+  }
+
+  private async getReusableSession(input: {
+    notebookId: string;
+    notebookUrl: string;
+    conversation?: string;
+  }): Promise<NotebookSessionRecord | undefined> {
+    const conversation = input.conversation ?? "default";
+    const record = (await this.readSessions()).find((session) =>
+      session.notebookId === input.notebookId &&
+      session.notebookUrl === input.notebookUrl &&
+      session.conversation === conversation
+    );
+    if (!record) return undefined;
+
+    const ageSeconds = (Date.now() - new Date(record.lastUsedAt).getTime()) / 1000;
+    return ageSeconds <= this.sessionTtlSeconds() ? record : undefined;
+  }
+
+  private async readSessions(): Promise<NotebookSessionRecord[]> {
+    try {
+      return JSON.parse(
+        await readFile(join(this.deps.dataDir, "sessions.json"), "utf8"),
+      ) as NotebookSessionRecord[];
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+      throw error;
+    }
+  }
+
+  private sessionTtlSeconds(): number {
+    const ttlSeconds = (this.deps.sessions as unknown as { ttlSeconds?: unknown }).ttlSeconds;
+    return typeof ttlSeconds === "number" ? ttlSeconds : 900;
+  }
+
+  async library(input: NotebookLmLibraryInput): Promise<NotebookLmLibraryResponse> {
+    const action = input.action ?? "list";
+    if (action === "list") {
+      return { status: "ok", action, notebooks: await this.deps.library.list() };
+    }
+    if (action === "search") {
+      const query = input.query?.trim().toLowerCase();
+      const notebooks = query
+        ? (await this.deps.library.list()).filter((record) => notebookContains(record, query))
+        : await this.deps.library.list();
+      return { status: "ok", action, notebooks };
+    }
+
+    const resolved = await this.deps.library.resolve({
+      notebook: input.notebook,
+      notebookId: input.notebookId ?? input.notebook_id,
+      notebookUrl: input.notebookUrl ?? input.notebook_url,
+    });
+    if (resolved.status === "ambiguous") {
+      return { status: "ambiguous_notebook", candidates: resolved.candidates };
+    }
+    if (resolved.status === "not_found") {
+      return { status: "notebook_not_found", candidates: resolved.candidates };
+    }
+    const cleared = await this.deps.sessions.clear({
+      notebookId: resolved.notebook.id,
+      conversation: input.conversation,
+    });
+    return { status: "ok", action, cleared };
+  }
+
+  async discover(input: NotebookLmDiscoverInput): Promise<NotebookLmDiscoverResponse> {
+    if (!this.deps.discoverer) {
+      return {
+        status: "browser_failed",
+        message: "NotebookLM account discovery is not configured.",
+        repairHint: "Ask by notebook URL or configure the discovery adapter.",
+      };
+    }
+
+    try {
+      const cards = await this.deps.discoverer.discover({ limit: input.limit ?? 20 });
+      const imported: NotebookRecord[] = [];
+      for (const card of cards) {
+        const resolved = await this.deps.library.resolve({ notebookUrl: card.url });
+        const existing = resolved.status === "matched" ? resolved.notebook : undefined;
+        imported.push(await this.deps.library.upsert({
+          url: card.url,
+          name: existing?.name ?? card.name,
+          aliases: existing?.aliases ?? [],
+          description: existing?.description ?? "",
+          topics: existing?.topics ?? [],
+          tags: [...(existing?.tags ?? []), ...(input.tag ? [input.tag] : [])],
+          source: existing?.source ?? "discovered",
+          discoveredAt: new Date().toISOString(),
+        }));
+      }
+      return { status: "ok", imported: imported.length, notebooks: imported };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      return {
+        status: "browser_failed",
+        message,
+        repairHint: notebookLmDiscoveryRepairHint(message),
+      };
+    }
+  }
+
+  private async askAndSave(input: {
+    input: NotebookLmResearchInput;
+    notebook: NotebookRecord;
+    sessionId?: string;
+  }): Promise<Extract<NotebookLmResearchResponse, { status: "ok" }>> {
+    const args: Record<string, unknown> = {
+      question: input.input.question,
+      notebook_url: input.notebook.url,
+    };
+    if (input.sessionId) args.session_id = input.sessionId;
+
+    let result: CallToolResult;
+    try {
+      result = await this.deps.client.callTool("ask_question", args);
+    } catch (error) {
+      throw new NotebookLmUpstreamCallError(error);
+    }
+    const structured = structuredContent(result);
+    const returnedSessionId = typeof structured.session_id === "string"
+      ? structured.session_id
+      : undefined;
+    const sessionRefreshed = returnedSessionId !== undefined && returnedSessionId !== input.sessionId;
+    if (returnedSessionId !== undefined) {
+      await this.deps.sessions.saveSession({
+        notebookId: input.notebook.id,
+        notebookUrl: input.notebook.url,
+        conversation: input.input.conversation,
+        upstreamSessionId: returnedSessionId,
+      });
+    }
+    return {
+      status: "ok",
+      notebook: input.notebook,
+      answer: structured.answer,
+      result,
+      sessionId: returnedSessionId,
+      sessionRefreshed,
+    };
+  }
+}
+
+function structuredContent(result: CallToolResult): Record<string, unknown> {
+  const structured = result.structuredContent;
+  return structured && typeof structured === "object" && !Array.isArray(structured)
+    ? structured as Record<string, unknown>
+    : {};
+}
+
+function normalizeHealthStatus(
+  value: unknown,
+  authenticated: boolean,
+): { status: "ok"; repairPlan?: undefined } | {
+  status: NotebookLmWorkflowFailureStatus;
+  repairPlan: NotebookLmRepairPlan;
+} {
+  if (!authenticated) {
+    return {
+      status: "not_authenticated",
+      repairPlan: {
+        code: "not_authenticated",
+        message: "NotebookLM is not authenticated.",
+        repairHint: "Run notebooklm_status or notebooklm_setup_auth with a visible browser.",
+      },
+    };
+  }
+
+  if (value === undefined) return { status: "ok" };
+  if (typeof value === "string" && ["ok", "healthy"].includes(value.toLowerCase())) {
+    return { status: "ok" };
+  }
+
+  const upstreamStatus = typeof value === "string" ? value : JSON.stringify(value);
+  return {
+    status: "upstream_unavailable",
+    repairPlan: {
+      code: "upstream_unavailable",
+      message: `NotebookLM health status is ${upstreamStatus ?? "unknown"}.`,
+      repairHint: "Check NotebookLM status and retry with a refreshed browser profile.",
+    },
+  };
+}
+
+function repairPlanFromError(error: unknown): NotebookLmRepairPlan {
+  if (error instanceof NotebookLmClientError) {
+    return {
+      code: error.code,
+      message: error.message,
+      repairHint: error.repairHint,
+    };
+  }
+  const message = error instanceof Error ? error.message : String(error);
+  return {
+    code: "upstream_unavailable",
+    message,
+    repairHint: "Check that notebooklm-mcp can start and that Node/npm are available.",
+  };
+}
+
+function failureResponseFromError(
+  error: unknown,
+  notebook: NotebookRecord,
+): Extract<NotebookLmResearchResponse, { repairPlan: NotebookLmRepairPlan }> {
+  const upstreamError = upstreamCallErrorCause(error);
+  if (!upstreamError.found) throw error;
+  const repairPlan = repairPlanFromError(upstreamError.cause);
+  return {
+    status: repairPlan.code as NotebookLmWorkflowFailureStatus,
+    notebook,
+    repairPlan,
+  };
+}
+
+function isSessionRelatedError(error: unknown): boolean {
+  const unwrapped = upstreamCallErrorCause(error);
+  const upstreamError = unwrapped.found ? unwrapped.cause : error;
+  if (upstreamError instanceof NotebookLmClientError && upstreamError.code === "auth_state_stale") return true;
+  const message = upstreamError instanceof Error ? upstreamError.message : String(upstreamError);
+  const normalized = message.toLowerCase();
+  return normalized.includes("session") ||
+    normalized.includes("expired") ||
+    normalized.includes("stale") ||
+    normalized.includes("invalid session");
+}
+
+class NotebookLmUpstreamCallError extends Error {
+  readonly upstreamCause: unknown;
+
+  constructor(cause: unknown) {
+    super(cause instanceof Error ? cause.message : String(cause), { cause });
+    this.name = "NotebookLmUpstreamCallError";
+    this.upstreamCause = cause;
+  }
+}
+
+function upstreamCallErrorCause(error: unknown): { found: true; cause: unknown } | { found: false } {
+  if (error instanceof NotebookLmUpstreamCallError) return { found: true, cause: error.upstreamCause };
+  if (error instanceof NotebookLmClientError) return { found: true, cause: error };
+  return { found: false };
+}
+
+class NotebookLmResolveError extends Error {
+  constructor(readonly response: Extract<
+    NotebookLmResearchResponse,
+    { status: "ambiguous_notebook" | "notebook_not_found" }
+  >) {
+    super(response.status);
+    this.name = "NotebookLmResolveError";
+  }
+}
+
+function notebookIdFromUrl(value: string): string {
+  const parsed = new URL(value);
+  const id = parsed.pathname.split("/").filter(Boolean).at(-1);
+  if (!id) throw new Error(`Notebook URL does not contain an id: ${value}`);
+  return id;
+}
+
+function notebookContains(record: NotebookRecord, query: string): boolean {
+  return [
+    record.id,
+    record.url,
+    record.name,
+    record.description,
+    ...record.aliases,
+    ...record.topics,
+    ...record.tags,
+  ].some((value) => value.toLowerCase().includes(query));
+}
+
+function notebookLmDiscoveryRepairHint(message: string): string {
+  const lower = message.toLowerCase();
+  if (lower.includes("not authenticated") || lower.includes("accounts.google.com")) {
+    return "Open /notebooklm/auth-refresh on the DevSpace server, upload a fresh NotebookLM browser state from the current PC, then retry discovery.";
+  }
+  return "Ask by notebook URL or configure the discovery adapter.";
+}

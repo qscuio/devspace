@@ -180,13 +180,14 @@ a PTY, or send Ctrl-C. Set `tty: true` only for commands that need a terminal.
 
 ## Show Changes
 
-By default, `DEVSPACE_WIDGETS=full`.
+By default, `DEVSPACE_WIDGETS=off`, so results use ChatGPT-native text without
+starting custom iframes.
 
-In that mode, DevSpace attaches widget UI to the exposed workspace, file, edit,
-and shell tools. The aggregate `show_changes` tool is not exposed by default.
+Set `DEVSPACE_WIDGETS=changes` to expose the aggregate `show_changes` tool and
+attach widget UI only to `open_workspace` and `show_changes`. Frequent read,
+search, and shell calls still use native text results in that mode.
 
-Use `DEVSPACE_WIDGETS=off` to disable widget UI, or `DEVSPACE_WIDGETS=changes`
-to expose the aggregate show-changes flow.
+Use `DEVSPACE_WIDGETS=full` to attach widget UI to every exposed coding tool.
 
 When `show_changes` is exposed, call it exactly once after the final file
 modification in any turn that changes files. It shows the combined changes for

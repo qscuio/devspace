@@ -93,6 +93,7 @@ export interface ToolPayload {
   content?: ToolContent[];
   diff?: string;
   patch?: string;
+  reviewPayloadUrl?: string;
 }
 
 export function isToolName(value: unknown): value is ToolName {
@@ -140,6 +141,55 @@ export function isReviewTool(tool: ToolName): boolean {
   return tool === "show_changes";
 }
 
+export function progressActionLabel(tool: ToolName | undefined): string {
+  switch (tool) {
+    case "open_workspace":
+      return "Opening Workspace";
+    case "read":
+      return "Reading File";
+    case "write":
+      return "Writing File";
+    case "edit":
+      return "Editing File";
+    case "apply_patch":
+      return "Applying Patch";
+    case "grep":
+      return "Searching Files";
+    case "glob":
+      return "Finding Files";
+    case "ls":
+      return "Listing Directory";
+    case "bash":
+      return "Running Bash";
+    case "exec_command":
+    case "write_stdin":
+      return "Running Command";
+    case "show_changes":
+      return "Preparing Review";
+    default:
+      return "Running Tool";
+  }
+}
+
+export function progressDetailLabel(
+  tool: ToolName | undefined,
+  args: Record<string, unknown> | undefined,
+): string {
+  if (!args) return "Waiting for tool progress...";
+  const detail = tool !== undefined && isShellTool(tool)
+    ? stringValue(args.command) ?? stringValue(args.cmd) ?? stringValue(args.chars)
+    : stringValue(args.path)
+      ?? stringValue(args.root)
+      ?? stringValue(args.pattern)
+      ?? stringValue(args.command);
+  if (!detail) return "Waiting for tool progress...";
+  return detail.length > 140 ? `${detail.slice(0, 137)}...` : detail;
+}
+
+function stringValue(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value : undefined;
+}
+
 export function isToolResultCard(value: unknown): value is Omit<ToolResultCard, "tool"> {
   return Boolean(value && typeof value === "object");
 }
@@ -181,7 +231,9 @@ export function isExpandableCard(card: ToolResultCard): boolean {
     );
   }
 
-  if (isReviewTool(card.tool)) return Boolean(card.files?.length || card.payload?.patch);
+  if (isReviewTool(card.tool)) {
+    return Boolean(card.files?.length || card.payload?.patch || card.payload?.reviewPayloadUrl);
+  }
   if (isPatchTool(card.tool)) return Boolean(card.payload?.patch);
 
   return Boolean(card.payload);
@@ -189,9 +241,18 @@ export function isExpandableCard(card: ToolResultCard): boolean {
 
 export function isInitiallyExpandedCard(card: ToolResultCard): boolean {
   if (card.tool === "open_workspace") return isExpandableCard(card);
-  if (isReviewTool(card.tool)) return isExpandableCard(card);
+  if (isReviewTool(card.tool)) return false;
   if (isPatchTool(card.tool)) {
     return card.files?.length === 1 && isExpandableCard(card);
   }
   return false;
+}
+
+export function shouldLoadReviewPayload(
+  card: ToolResultCard,
+  detailsRequested: boolean,
+): boolean {
+  return isReviewTool(card.tool)
+    && detailsRequested
+    && Boolean(card.payload?.patch || card.payload?.reviewPayloadUrl);
 }
